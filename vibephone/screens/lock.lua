@@ -15,7 +15,6 @@ local function drawHeader(theme, data, blinkOn)
 
   ui.fillRect(1, y, w, 1, theme.surface)
 
-  -- On lock screen, we're "Locked" not Connected
   local dot = blinkOn and "●" or "○"
   ui.writeAt(2, y, dot, theme.muted, theme.surface)
   ui.writeAt(4, y, "Locked", theme.text, theme.surface)
@@ -60,7 +59,8 @@ local function drawLock(theme, data, pin, errMsg, pressedId, blinkOn)
 
   drawHeader(theme, data, blinkOn)
 
-  -- Content starts at line 3 (leave line 2 as breathing space)
+  ui.fillRect(1, 2, w, 1, theme.bg)
+
   local textTop = 3
   ui.center(textTop,     "Enter PIN", theme.text, theme.bg)
   ui.center(textTop + 1, "Tap digits or type", theme.muted, theme.bg)
@@ -72,7 +72,6 @@ local function drawLock(theme, data, pin, errMsg, pressedId, blinkOn)
     ui.center(textTop + 4, errMsg, theme.bad, theme.bg)
   end
 
-  -- Keypad auto-fit
   local keyH = 2
   local rowGap = 1
   local colGap = (w <= 26) and 1 or 2
@@ -140,7 +139,6 @@ function M.run(cfg, data)
   while true do
     local theme = ui.getTheme(data)
 
-    -- lockout
     local ms = nowMs()
     if data.lock.lockedUntil and ms < data.lock.lockedUntil then
       drawLock(theme, data, "", "Too many tries. Wait...", nil, blinkOn)

@@ -1,0 +1,1 @@
+{profile:{name:"VibePhone"},number:1000,sms:{threads:{1001:[{body:"How are you",from:"1000",ts:1767747349938,to:"1001"}]},lastSeenTs:1767747349938},token:"390186-510827",ui:{wallpaper:"border",theme:"neon",accent:512},lock:{requirePinForStore:false},serverId:2,serverName:"VibePhone Server #2",setupComplete:true}

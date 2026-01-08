@@ -1,0 +1,404 @@
+-- Create Train Network Monitor (CC:Tweaked)
+-- Shows all Create Train Station peripherals on your wired network.
+-- Touch a station row to see details. Touch "Back" to return.
+--
+-- Uses Create's built-in CC integration (Train Station peripheral + schedule tables).
+-- Train Station methods like getStationName(), isTrainPresent(), getTrainName(), getSchedule(), etc.
+-- See: Create Wiki "Train Station (Peripheral)" and "Train Schedule (ComputerCraft)".
+
+local REFRESH_SECONDS = 1.0
+
+-- Prefer monitor if present, otherwise use terminal
+local mon = peripheral.find("monitor")
+local screen = mon or term
+if mon then
+  mon.setTextScale(0.5)
+end
+
+local function safeCall(obj, method, ...)
+  if not obj or type(obj[method]) ~= "function" then return nil, "no_method" end
+  local ok, a, b, c, d = pcall(obj[method], ...)
+  if not ok then return nil, a end
+  return a, b, c, d
+end
+
+local function clamp(s, n)
+  s = tostring(s or "")
+  if #s <= n then return s end
+  return s:sub(1, math.max(0, n - 1)) .. "…"
+end
+
+local function padRight(s, n)
+  s = tostring(s or "")
+  if #s >= n then return s:sub(1, n) end
+  return s .. string.rep(" ", n - #s)
+end
+
+local function centerLine(w, text)
+  text = tostring(text or "")
+  if #text >= w then return text:sub(1, w) end
+  local left = math.floor((w - #text) / 2)
+  return string.rep(" ", left) .. text
+end
+
+local function setColor(fg, bg)
+  if screen.setTextColor then screen.setTextColor(fg) end
+  if screen.setBackgroundColor then screen.setBackgroundColor(bg) end
+end
+
+local function clear(bg)
+  if screen.setBackgroundColor then screen.setBackgroundColor(bg or colors.black) end
+  screen.clear()
+end
+
+local function getSize()
+  return screen.getSize()
+end
+
+local function isTrainStationPeripheral(name)
+  -- Robust detection: train stations expose getStationName and isTrainPresent.
+  local methods = peripheral.getMethods(name)
+  if not methods then return false end
+  local has = {}
+  for _, m in ipairs(methods) do has[m] = true end
+  return has.getStationName and has.isTrainPresent
+end
+
+local function listStations()
+  local out = {}
+  for _, name in ipairs(peripheral.getNames()) do
+    if isTrainStationPeripheral(name) then
+      local p = peripheral.wrap(name)
+      local stationName = safeCall(p, "getStationName")
+      -- If not connected to track, Create throws; stationName will be nil.
+      out[#out + 1] = {
+        periph = name,
+        obj = p,
+        stationName = stationName or ("<untracked> (" .. name .. ")"),
+      }
+    end
+  end
+
+  table.sort(out, function(a, b)
+    return tostring(a.stationName):lower() < tostring(b.stationName):lower()
+  end)
+
+  return out
+end
+
+local function scheduleSummary(schedule)
+  if type(schedule) ~= "table" then return nil end
+  local renameText
+  local nextDest
+
+  local entries = schedule.entries
+  if type(entries) ~= "table" then return { cyclic = schedule.cyclic, name = nil, next = nil } end
+
+  for _, e in ipairs(entries) do
+    local inst = e and e.instruction
+    if type(inst) == "table" and type(inst.id) == "string" then
+      if inst.id == "create:rename" and type(inst.data) == "table" and type(inst.data.text) == "string" then
+        renameText = renameText or inst.data.text
+      elseif inst.id == "create:destination" and type(inst.data) == "table" and type(inst.data.text) == "string" then
+        nextDest = nextDest or inst.data.text
+      end
+    end
+    if renameText and nextDest then break end
+  end
+
+  return {
+    cyclic = schedule.cyclic,
+    name = renameText,
+    next = nextDest,
+  }
+end
+
+local function readStationState(st)
+  local p = st.obj
+  local state = {
+    periph = st.periph,
+    stationName = st.stationName,
+    present = false,
+    imminent = false,
+    enroute = false,
+    assembly = false,
+    trainName = nil,
+    hasSchedule = false,
+    schedule = nil,
+    scheduleInfo = nil,
+    err = nil,
+  }
+
+  local assembly, aerr = safeCall(p, "isInAssemblyMode")
+  if assembly ~= nil then state.assembly = assembly end
+
+  local present, perr = safeCall(p, "isTrainPresent")
+  if present == nil then
+    -- Common if station isn't connected to track; keep an error note
+    state.err = perr
+    return state
+  end
+  state.present = present
+
+  local imminent = safeCall(p, "isTrainImminent")
+  if imminent ~= nil then state.imminent = imminent end
+
+  local enroute = safeCall(p, "isTrainEnroute")
+  if enroute ~= nil then state.enroute = enroute end
+
+  if state.present then
+    local tname = safeCall(p, "getTrainName")
+    state.trainName = tname
+
+    local hs = safeCall(p, "hasSchedule")
+    state.hasSchedule = hs and true or false
+    if state.hasSchedule then
+      local sched = safeCall(p, "getSchedule")
+      state.schedule = sched
+      state.scheduleInfo = scheduleSummary(sched)
+    end
+  end
+
+  return state
+end
+
+-- UI state
+local view = "list" -- list | detail
+local selectedIndex = 1
+local stations = {}
+local stationStates = {}
+local page = 1
+
+local function refreshData()
+  stations = listStations()
+  stationStates = {}
+  for i, st in ipairs(stations) do
+    stationStates[i] = readStationState(st)
+  end
+  if selectedIndex > #stations then selectedIndex = math.max(1, #stations) end
+end
+
+local function statusTag(s)
+  if s.err then return "ERR" end
+  if s.assembly then return "ASM" end
+  if s.present then return "HERE" end
+  if s.imminent then return "SOON" end
+  if s.enroute then return "ENRT" end
+  return "----"
+end
+
+local function drawHeader(w, title)
+  setColor(colors.white, colors.black)
+  screen.setCursorPos(1, 1)
+  screen.write(padRight(centerLine(w, title), w))
+end
+
+local function drawList()
+  local w, h = getSize()
+  clear(colors.black)
+
+  drawHeader(w, "Create Train Network")
+  setColor(colors.gray, colors.black)
+  screen.setCursorPos(1, 2)
+  screen.write(padRight("Touch a station for details  |  Page " .. page, w))
+
+  -- Summary
+  local total = #stationStates
+  local presentCount, imminentCount, enrouteCount, errCount = 0, 0, 0, 0
+  for _, s in ipairs(stationStates) do
+    if s.err then errCount = errCount + 1 end
+    if s.present then presentCount = presentCount + 1 end
+    if s.imminent then imminentCount = imminentCount + 1 end
+    if s.enroute then enrouteCount = enrouteCount + 1 end
+  end
+
+  setColor(colors.lightGray, colors.black)
+  screen.setCursorPos(1, 3)
+  screen.write(padRight(("Stations: %d  |  Here: %d  Soon: %d  Enroute: %d  Err: %d")
+    :format(total, presentCount, imminentCount, enrouteCount, errCount), w))
+
+  -- Table header
+  local y0 = 5
+  setColor(colors.cyan, colors.black)
+  screen.setCursorPos(1, y0 - 1)
+  local colTag = 6
+  local colName = math.max(10, w - colTag - 1)
+  screen.write(padRight("STAT  " .. padRight("STATION", colName), w))
+
+  -- Rows
+  local rows = h - y0 + 1
+  if rows < 1 then return end
+
+  local totalPages = math.max(1, math.ceil(total / rows))
+  if page > totalPages then page = totalPages end
+  local startIdx = (page - 1) * rows + 1
+  local endIdx = math.min(total, startIdx + rows - 1)
+
+  for i = startIdx, endIdx do
+    local y = y0 + (i - startIdx)
+    local s = stationStates[i]
+    local tag = statusTag(s)
+    local name = s.stationName or ("<station> " .. s.periph)
+
+    local bg = colors.black
+    local fg = colors.white
+    if s.err then fg = colors.red end
+    if s.present then fg = colors.lime end
+    if (not s.present) and (s.imminent or s.enroute) then fg = colors.yellow end
+    if i == selectedIndex then
+      bg = colors.gray
+      fg = colors.black
+    end
+
+    setColor(fg, bg)
+    screen.setCursorPos(1, y)
+    local line = padRight(tag, 4) .. "  " .. clamp(name, w - 6)
+    screen.write(padRight(line, w))
+  end
+
+  -- Footer hint
+  setColor(colors.gray, colors.black)
+  screen.setCursorPos(1, h)
+  screen.write(padRight("Tap bottom-left/right to change page", w))
+end
+
+local function drawDetail()
+  local w, h = getSize()
+  clear(colors.black)
+
+  local s = stationStates[selectedIndex]
+  if not s then
+    drawHeader(w, "No stations found")
+    setColor(colors.gray, colors.black)
+    screen.setCursorPos(1, 3)
+    screen.write(padRight("Connect Train Stations to a wired modem network.", w))
+    return
+  end
+
+  -- Back button
+  setColor(colors.black, colors.white)
+  screen.setCursorPos(1, 1)
+  screen.write(" Back ")
+  setColor(colors.white, colors.black)
+  screen.setCursorPos(8, 1)
+  screen.write(clamp("Station Details", w - 7))
+
+  local y = 3
+  local function line(label, value, color)
+    if y > h then return end
+    setColor(colors.lightGray, colors.black)
+    screen.setCursorPos(1, y); screen.write(padRight(label .. ":", 14))
+    setColor(color or colors.white, colors.black)
+    screen.setCursorPos(15, y); screen.write(clamp(value, w - 14))
+    y = y + 1
+  end
+
+  line("Station", s.stationName or s.periph, colors.cyan)
+  line("Peripheral", s.periph, colors.gray)
+
+  if s.err then
+    line("Status", "ERROR (not on track / not accessible)", colors.red)
+    line("Err", tostring(s.err), colors.red)
+    return
+  end
+
+  line("Assembly", s.assembly and "YES" or "NO", s.assembly and colors.orange or colors.white)
+  line("Train present", s.present and "YES" or "NO", s.present and colors.lime or colors.white)
+  line("Train imminent", s.imminent and "YES" or "NO", s.imminent and colors.yellow or colors.white)
+  line("Train enroute", s.enroute and "YES" or "NO", s.enroute and colors.yellow or colors.white)
+
+  if s.present then
+    line("Train name", s.trainName or "<unnamed>", colors.lime)
+    line("Has schedule", s.hasSchedule and "YES" or "NO", s.hasSchedule and colors.cyan or colors.white)
+    if s.scheduleInfo then
+      local cyc = (s.scheduleInfo.cyclic == true) and "cyclic" or "one-shot"
+      line("Schedule", (s.scheduleInfo.name or "<no name>") .. " (" .. cyc .. ")", colors.cyan)
+      if s.scheduleInfo.next then
+        line("Next dest", s.scheduleInfo.next, colors.white)
+      end
+    end
+  end
+
+  setColor(colors.gray, colors.black)
+  screen.setCursorPos(1, h)
+  screen.write(padRight("Tip: Touch another station from list view.", w))
+end
+
+local function redraw()
+  if view == "list" then drawList() else drawDetail() end
+end
+
+-- Touch handling
+local function handleTouch(x, y)
+  local w, h = getSize()
+
+  if view == "detail" then
+    -- Back button region
+    if y == 1 and x >= 1 and x <= 6 then
+      view = "list"
+      redraw()
+    end
+    return
+  end
+
+  -- List view paging via bottom corners
+  if y == h then
+    if x <= math.floor(w / 2) then
+      page = math.max(1, page - 1)
+    else
+      local rows = h - 5 + 1
+      local totalPages = math.max(1, math.ceil(#stationStates / math.max(1, rows)))
+      page = math.min(totalPages, page + 1)
+    end
+    redraw()
+    return
+  end
+
+  -- Click row
+  local y0 = 5
+  local rows = h - y0 + 1
+  if y >= y0 and y < y0 + rows then
+    local idxInPage = y - y0
+    local startIdx = (page - 1) * rows + 1
+    local idx = startIdx + idxInPage
+    if stationStates[idx] then
+      selectedIndex = idx
+      view = "detail"
+      redraw()
+    end
+  end
+end
+
+-- Main loop
+refreshData()
+redraw()
+
+local timer = os.startTimer(REFRESH_SECONDS)
+
+while true do
+  local ev, p1, p2, p3 = os.pullEvent()
+
+  if ev == "timer" and p1 == timer then
+    refreshData()
+    redraw()
+    timer = os.startTimer(REFRESH_SECONDS)
+
+  elseif ev == "monitor_touch" then
+    handleTouch(p2, p3)
+
+  elseif ev == "mouse_click" then
+    handleTouch(p2, p3)
+
+  elseif ev == "key" then
+    -- Quick keyboard controls (terminal)
+    if p1 == keys.q then break end
+    if p1 == keys.r then refreshData(); redraw() end
+    if p1 == keys.left then page = math.max(1, page - 1); redraw() end
+    if p1 == keys.right then page = page + 1; redraw() end
+  end
+end
+
+setColor(colors.white, colors.black)
+screen.clear()
+screen.setCursorPos(1, 1)
+print("Train monitor closed.")

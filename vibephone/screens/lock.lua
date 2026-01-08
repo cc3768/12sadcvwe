@@ -114,7 +114,7 @@ local function drawLock(theme, data, pin, errMsg, pressedId, blinkOn)
   end
 
   ui.fillRect(1, footerY, w, 1, theme.bg)
-  ui.center(footerY, "SUB unlock | Backspace delete | 1=Reset", theme.muted, theme.bg)
+  ui.center(footerY, "SUB unlock | Backspace delete", theme.muted, theme.bg)
 
   return buttons
 end
@@ -156,11 +156,6 @@ function M.run(cfg, data)
       timerId = os.startTimer(0.25)
 
     elseif e == "char" then
-      if a == "1" then
-        store.reset(data)
-        store.save(cfg.dataFile, data)
-        return "setup"
-      end
 
       if a:match("%d") then
         if #pin < 12 then pin = pin .. a end
@@ -168,11 +163,6 @@ function M.run(cfg, data)
       end
 
     elseif e == "key" then
-      if a == keys.one then
-        store.reset(data)
-        store.save(cfg.dataFile, data)
-        return "setup"
-      end
 
       if a == keys.backspace then
         pin = pin:sub(1, -2)

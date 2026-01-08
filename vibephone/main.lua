@@ -16,19 +16,20 @@ local appstore = require("screens.appstore")
 local messages = require("screens.messages")
 
 -- Load persisted data
-local data = store.load(cfg.dataFile)
+local data, DATA_PATH = store.load("data.json")
 
 -- Init modem/rednet
 net.init(cfg)
 
 local function ensureSetup()
-  if not data.serverId or not data.number or not data.pinHash then
-    while true do
-      local ok = setup.run(cfg, data, store, net)
-      if ok then break end
-    end
+  while (not data.serverId) or (not data.number) or (not data.pinHash) do
+    local ok = setup.run(cfg, data)
+    if ok then break end
   end
 end
+
+
+
 
 ensureSetup()
 
@@ -36,14 +37,14 @@ while true do
   local unlocked, requestedReset = lock.run(cfg, data)
   if requestedReset then
     store.reset(data)
-    store.save(cfg.dataFile, data)
+    store.save(DATA_PATH, data) -- ✅ save to the same file we loaded
     ensureSetup()
   elseif unlocked then
     while true do
       local action = home.run(cfg, data)
       if action == "lock" then break end
       if action == "settings" then
-        local result = settings.run(cfg, data, store, net)
+        local result = settings.run(cfg, data, store, net, DATA_PATH)
         if result == "setup" then
           ensureSetup()
           break

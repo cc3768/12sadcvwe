@@ -5,28 +5,53 @@ local net = require("net")
 
 local M = {}
 
+-- Stable data path: data.json next to the running program
+local BASE = fs.getDir(shell.getRunningProgram())
+if BASE == "" then BASE = "." end
+local DATA_PATH = fs.combine(BASE, "data.json")
+
 local function ensureSms(data)
   data.sms = data.sms or {}
   data.sms.threads = data.sms.threads or {} -- key = otherNumber
-  data.sms.lastSeenTs = data.sms.lastSeenTs or 0
+  data.sms.lastSeenTs = data.sms.lastSeenTs or 0 -- sync cursor (server time only)
 end
 
-local function nowTs()
+-- Always use milliseconds internally
+local function nowMs()
   if os.epoch then return os.epoch("utc") end
-  return os.time()
+  -- fallback (not ideal, but keeps type consistent)
+  return os.time() * 1000
+end
+
+local function toMs(ts)
+  ts = tonumber(ts or 0) or 0
+  -- If it looks like seconds (e.g. 1700000000), convert to ms
+  if ts > 0 and ts < 100000000000 then
+    return ts * 1000
+  end
+  return ts
 end
 
 local function save(cfg, data)
-  store.save(cfg.dataFile, data)
+  store.save(DATA_PATH, data)
 end
 
-local function addMsg(data, other, msg)
+local function addMsg(data, other, msg, fromServer)
   ensureSms(data)
   other = tostring(other)
   data.sms.threads[other] = data.sms.threads[other] or {}
+
+  -- Normalize ts to ms
+  msg.ts = toMs(msg.ts or nowMs())
+
   table.insert(data.sms.threads[other], msg)
-  local ts = tonumber(msg.ts or 0) or 0
-  if ts > (data.sms.lastSeenTs or 0) then data.sms.lastSeenTs = ts end
+
+  -- IMPORTANT: only advance sync cursor for messages that came from server sync
+  if fromServer then
+    if msg.ts > (data.sms.lastSeenTs or 0) then
+      data.sms.lastSeenTs = msg.ts
+    end
+  end
 end
 
 local function lastMsg(thread)
@@ -180,21 +205,29 @@ local function trySync(cfg, data)
   local ok, resp = net.request(data, {
     type = "vp_sms_sync",
     token = data.token,
-    since = data.sms.lastSeenTs or 0,
+    since = data.sms.lastSeenTs or 0, -- ms cursor
   }, 2.5)
 
   if not ok or type(resp) ~= "table" then return false end
   if resp.type ~= "vp_sms_sync_ok" or type(resp.messages) ~= "table" then return false end
 
+  local maxTs = data.sms.lastSeenTs or 0
+
   for _,m in ipairs(resp.messages) do
     local other = tostring(m.other or m.from or "unknown")
+    local ts = toMs(m.ts or nowMs())
+
     addMsg(data, other, {
       from = tostring(m.from or other),
       to   = tostring(m.to or (data.number or "")),
       body = tostring(m.body or ""),
-      ts   = tonumber(m.ts or nowTs()) or nowTs(),
-    })
+      ts   = ts,
+    }, true)
+
+    if ts > maxTs then maxTs = ts end
   end
+
+  data.sms.lastSeenTs = maxTs
   save(cfg, data)
   return true
 end
@@ -213,12 +246,14 @@ local function trySend(cfg, data, toNumber, body)
     end)
   end
 
+  -- Local echo (DO NOT advance lastSeenTs)
   addMsg(data, toNumber, {
     from = tostring(data.number or ""),
     to   = tostring(toNumber),
     body = tostring(body),
-    ts   = nowTs(),
-  })
+    ts   = nowMs(),
+  }, false)
+
   save(cfg, data)
   return true
 end

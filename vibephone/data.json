@@ -1,1 +1,36 @@
-{profile:{name:"VibePhone"},number:1000,sms:{threads:{1001:[{body:"How are you",from:"1000",ts:1767747349938,to:"1001"}]},lastSeenTs:1767747349938},token:"390186-510827",ui:{wallpaper:"border",theme:"neon",accent:512},lock:{requirePinForStore:false},serverId:2,serverName:"VibePhone Server #2",setupComplete:true}
+{
+  profile = {
+    name = "VibePhone",
+  },
+  serverId = 2,
+  sms = {
+    lastSeenTs = 0,
+    inbox = {},
+    unread = 0,
+    threads = {
+      [ "1001" ] = {
+        {
+          ts = 1767833408773,
+          body = "Hello",
+          to = "1001",
+          from = "1000",
+        },
+      },
+    },
+  },
+  ui = {
+    theme = "neon",
+    accent = 512,
+    wallpaper = "border",
+  },
+  setupComplete = true,
+  serverName = "VibePhone Server #2",
+  token = "805658-286775",
+  pinHash = "2088368127",
+  lock = {
+    lockedUntil = 0,
+    failedAttempts = 0,
+    requirePinForStore = false,
+  },
+  number = 1000,
+}

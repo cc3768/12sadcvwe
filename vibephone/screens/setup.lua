@@ -5,6 +5,15 @@ local net = require("net")
 
 local M = {}
 
+-- Always save/load the same file as main: "data.json" in the program folder.
+-- data_store.lua normalizes relative paths to the running program's folder (with the updated version I gave you).
+local SAVE_PATH = "data.json"
+
+local function saveData(cfg, data)
+  -- Do NOT use cfg.dataFile here (it is what caused the mismatch).
+  store.save(SAVE_PATH, data)
+end
+
 local function drawHeader(theme, data, blinkOn, leftLabel)
   local w,_ = term.getSize()
   local y = 1
@@ -160,7 +169,8 @@ local function runCreatePin(cfg, data)
 
     elseif e == "char" then
       if a == "1" then
-        store.reset(data); store.save(cfg.dataFile, data)
+        store.reset(data)
+        saveData(cfg, data)
         return false, "reset"
       end
       if a:match("%d") then
@@ -174,7 +184,8 @@ local function runCreatePin(cfg, data)
 
     elseif e == "key" then
       if a == keys.one then
-        store.reset(data); store.save(cfg.dataFile, data)
+        store.reset(data)
+        saveData(cfg, data)
         return false, "reset"
       end
 
@@ -197,9 +208,10 @@ local function runCreatePin(cfg, data)
             pin = ""
             confirm = ""
           else
+            -- ✅ Persist pinHash using the same key main checks for
             data.pinHash = tostring(ui.djb2(pin))
             data.setupComplete = true
-            store.save(cfg.dataFile, data)
+            saveData(cfg, data)
             return true
           end
         end
@@ -231,7 +243,7 @@ local function runCreatePin(cfg, data)
               else
                 data.pinHash = tostring(ui.djb2(pin))
                 data.setupComplete = true
-                store.save(cfg.dataFile, data)
+                saveData(cfg, data)
                 return true
               end
             end
@@ -255,10 +267,12 @@ function M.run(cfg, data)
   local tick = 0
   local timerId = os.startTimer(0.25)
 
+  -- Net may already be init'd by main; net.init should be idempotent.
   net.init(cfg)
 
+  -- ✅ Return boolean so main's ensureSetup() loop works correctly
   if data.setupComplete and data.number and data.pinHash then
-    return "lock"
+    return true
   end
 
   -- Find server
@@ -279,12 +293,10 @@ function M.run(cfg, data)
     local e,a = os.pullEvent()
     if e == "key" and a == keys.enter then
       -- retry
-    elseif e == "char" and a == "1" then
-      store.reset(data); store.save(cfg.dataFile, data)
-      return "setup"
-    elseif e == "key" and a == keys.one then
-      store.reset(data); store.save(cfg.dataFile, data)
-      return "setup"
+    elseif (e == "char" and a == "1") or (e == "key" and a == keys.one) then
+      store.reset(data)
+      saveData(cfg, data)
+      return false
     elseif e == "timer" and a == timerId then
       tick = tick + 1
       blinkOn = (tick % 2 == 0)
@@ -306,21 +318,25 @@ function M.run(cfg, data)
     local deviceKey = tostring(os.getComputerID()) .. ":" .. tostring(os.getComputerLabel() or "phone")
     local ok, resp = net.request(data, { type="vp_register", deviceKey=deviceKey }, 4.0)
     if not ok or type(resp) ~= "table" then
-      return "setup"
+      return false
     end
 
     data.number = resp.number or data.number
     data.token = resp.token or data.token
     data.serverName = resp.serverName or data.serverName
-    store.save(cfg.dataFile, data)
+    saveData(cfg, data)
   end
 
   local okPin = runCreatePin(cfg, data)
   if not okPin then
-    return "setup"
+    return false
   end
 
-  return "lock"
+  -- ✅ Final guarantee
+  data.setupComplete = true
+  saveData(cfg, data)
+
+  return true
 end
 
 return M

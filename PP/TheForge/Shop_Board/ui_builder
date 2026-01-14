@@ -1,0 +1,261 @@
+local cfg = require("config")
+local ui  = require("ui_common")
+
+local M = {}
+
+-- =========================
+-- STATE
+-- =========================
+M.state = {
+  groupOpen = {
+    Armor   = false,
+    Tools   = true,
+    Weapons = false,
+    Ranged  = false,
+    Jewelry = false,
+  },
+  groupSelected = "Tools",
+  tool = nil,
+  parts = {},
+  submit = false,
+}
+
+local hits = {}
+
+local function getEnabledMaterials()
+  local list = {}
+  for name, mat in pairs(cfg.materials or {}) do
+    if mat.enabled ~= false then list[#list+1] = name end
+  end
+  table.sort(list)
+  if #list == 0 then list = {"wood"} end
+  return list
+end
+
+local function cycleMaterial(current, mats, dir)
+  local idx = 1
+  for i,v in ipairs(mats) do
+    if v == current then idx = i break end
+  end
+  idx = idx + (dir or 1)
+  if idx > #mats then idx = 1 end
+  if idx < 1 then idx = #mats end
+  return mats[idx]
+end
+
+local function toolEnabled(name)
+  local t = cfg.tools and cfg.tools[name]
+  if not t then return false end
+  return t.enabled ~= false
+end
+
+local function ensureParts(toolName)
+  M.state.parts = {}
+  local def = cfg.tools and cfg.tools[toolName]
+  if not def then return end
+  local mats = getEnabledMaterials()
+  for _,p in ipairs(def.parts or {}) do
+    M.state.parts[p] = mats[1]
+  end
+end
+
+local function calcTotal()
+  local total = 0
+  for _,matName in pairs(M.state.parts) do
+    local mat = cfg.materials and cfg.materials[matName]
+    total = total + (mat and mat.price or 0)
+  end
+  if cfg.sales and cfg.sales.enabled then
+    local d = tonumber(cfg.sales.discount) or 0
+    total = math.floor(total * (1 - d) + 0.5)
+  end
+  return total
+end
+
+local function header(m, w)
+  ui.panel(m, 1, 1, w, 3, cfg.ui.header or colors.gray)
+  ui.label(m, 3, 2, "THE FORGE Order Screen", colors.white)
+end
+--cc3768
+local function sidebar(m, x, y, w, h)
+  ui.panel(m, x, y, w, h, colors.lightGray)
+  ui.label(m, x+2, y, "TOOLS", colors.black)
+
+  local cy = y + 2
+
+  local function drawGroup(name, key, items)
+    -- group button
+    local isOpen = M.state.groupOpen[key] and true or false
+    local mark = isOpen and "â¼" or "â¶"
+    local bg = (M.state.groupSelected == key) and (cfg.ui.accent or colors.blue) or colors.gray
+    local fg = (M.state.groupSelected == key) and colors.white or colors.white
+
+    ui.panel(m, x+1, cy, w-2, 1, bg)
+    ui.label(m, x+2, cy, mark.." "..key, fg)
+    table.insert(hits, { kind="group", key=key, x1=x+1, x2=x+w-2, y1=cy, y2=cy })
+    cy = cy + 1
+
+    if isOpen then
+      for _,toolName in ipairs(items) do
+        if toolEnabled(toolName) then
+          local sel = (M.state.tool == toolName)
+          local tbg = sel and colors.blue or colors.lightGray
+          local tfg = sel and colors.white or colors.black
+          ui.panel(m, x+2, cy, w-4, 1, tbg)
+          ui.label(m, x+3, cy, toolName, tfg)
+          table.insert(hits, { kind="tool", tool=toolName, x1=x+2, x2=x+w-3, y1=cy, y2=cy })
+          cy = cy + 1
+        end
+      end
+    end
+
+    cy = cy + 1
+  end
+
+  local cats = cfg.toolCategories or {}
+  drawGroup("Armor","Armor",cats.Armor or {})
+  drawGroup("Ranged","Ranged",cats.Ranged or {})
+  drawGroup("Tools","Tools",cats.Tools or {})
+  drawGroup("Weapons","Weapons",cats.Weapons or {})
+  drawGroup("Jewelry","Jewelry",cats.Jewelry or {})
+end
+
+local function partsPanel(m, x, y, w, h)
+  ui.panel(m, x, y, w, h, cfg.ui.background or colors.gray)
+
+  if not M.state.tool then
+    ui.label(m, x+2, y+2, "Select a tool", colors.white)
+    return
+  end
+
+  ui.label(m, x+2, y+1, "Tool: "..M.state.tool, colors.white)
+
+  local py = y + 3
+  local mats = getEnabledMaterials()
+
+  -- Draw each part row: part name | dropdown | price
+  local def = cfg.tools[M.state.tool]
+  for _,part in ipairs(def.parts or {}) do
+    local matName = M.state.parts[part] or mats[1]
+    local price = (cfg.materials[matName] and cfg.materials[matName].price) or 0
+
+    -- part name
+    ui.label(m, x+2, py, part, colors.white)
+
+    -- dropdown-ish box
+    local boxX = x + 14
+    local boxW = math.max(8, w - 24)
+    ui.panel(m, boxX, py, boxW, 1, colors.lightBlue)
+    ui.label(m, boxX+1, py, matName, colors.black)
+    table.insert(hits, { kind="mat", part=part, x1=boxX, x2=boxX+boxW-1, y1=py, y2=py })
+
+    -- price
+    local priceTxt = tostring(price).."$"
+    ui.label(m, x+w-#priceTxt-2, py, priceTxt, colors.yellow)
+
+    py = py + 2
+  end
+
+  -- Place order button
+  local btnY = y + h - 5
+  ui.panel(m, x+2, btnY, w-4, 3, colors.green)
+  ui.label(m, x+math.floor(w/2)-5, btnY+1, "PLACE ORDER", colors.black)
+  table.insert(hits, { kind="place", x1=x+2, x2=x+w-3, y1=btnY, y2=btnY+2 })
+
+  -- Total bar
+  local total = calcTotal()
+  local barY = y + h - 1
+  ui.panel(m, x+2, barY, w-4, 1, colors.black)
+  ui.label(m, x+4, barY, "TOTAL: "..tostring(total).."$", colors.lime)
+end
+
+-- =========================
+-- DRAW
+-- =========================
+function M.draw(m)
+  hits = {}
+  m.setBackgroundColor(cfg.ui.background or colors.gray)
+  m.clear()
+
+  local w,h = m.getSize()
+  header(m, w)
+
+  local leftW = 14
+  sidebar(m, 1, 4, leftW, h-3)
+  partsPanel(m, leftW+1, 4, w-leftW, h-3)
+end
+
+-- =========================
+-- TOUCH
+-- =========================
+function M.touch(x,y)
+  for _,r in ipairs(hits) do
+    if ui.hitRect(x,y,r) then
+      if r.kind == "group" then
+        M.state.groupSelected = r.key
+        M.state.groupOpen[r.key] = not M.state.groupOpen[r.key]
+
+      elseif r.kind == "tool" then
+        M.state.tool = r.tool
+        ensureParts(r.tool)
+
+      elseif r.kind == "mat" then
+        local mats = getEnabledMaterials()
+        local cur = M.state.parts[r.part]
+        M.state.parts[r.part] = cycleMaterial(cur, mats, 1)
+
+      elseif r.kind == "place" then
+        if M.state.tool then
+          M.state.submit = true
+        end
+      end
+      return
+    end
+  end
+end
+
+-- =========================
+-- ORDER OUTPUT
+-- returns nil unless the user actually pressed PLACE ORDER
+-- =========================
+-- Reset builder UI back to default (after placing an order)
+function M.reset()
+  M.state.tool = nil
+  M.state.parts = {}
+  M.state.submit = false
+  M.state.groupSelected = "Tools"
+  M.state.groupOpen = {
+    Armor   = false,
+    Tools   = true,
+    Weapons = false,
+    Ranged  = false,
+    Jewelry = false,
+  }
+end
+
+
+function M.getOrder(user)
+  if not M.state.submit then return nil end
+  M.state.submit = false
+
+  -- shallow copy parts
+  local partsCopy = {}
+  for k,v in pairs(M.state.parts) do partsCopy[k]=v end
+
+  local order = {
+    id = os.epoch("utc"),
+    user = user,
+    tool = M.state.tool,
+    parts = partsCopy,
+    status = "pending",
+    total = calcTotal(),
+    _submit = true,
+  }
+
+  -- reset the UI after placing the order
+  if M.reset then M.reset() end
+
+  return order
+end
+
+return M

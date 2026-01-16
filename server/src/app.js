@@ -1,3 +1,4 @@
+// index.js (main server file) - copy/paste
 const WebSocket = require("ws");
 const { makeServer } = require("./serverFactory");
 const { nowMs, send, safeJsonParse } = require("./util");
@@ -5,15 +6,338 @@ const { getOrAssignCall, addClient, removeClient, getClient } = require("./state
 const { joinRoom, broadcastRoom } = require("./rooms");
 const { broadcastDirectory } = require("./directory");
 const { handleMessage } = require("./protocol");
-const { AppStore } = require("./appstore");
-const { registerAppStore } = require("./appstore");
 
-const APPSTORE = new AppStore([{"id": "vibechat", "name": "VibeChat", "version": "1.0.0", "description": "Realtime chat + DMs (client bundle).", "installBase": "/vcchat", "files": {"config.lua": "local config = {}\n\nconfig.URL = \"ws://192.168.5.2:8080\" -- change as needed\nconfig.DEFAULT_ROOM = \"#lobby\"\n\nconfig.LOG_LIMIT = 200\nconfig.MAX_TEXT = 240\n\nconfig.QUICK_ROOMS = { \"#lobby\", \"#general\", \"#trade\" }\n\nconfig.SETTINGS_PATH = \"/vcchat/settings.json\"\n\nreturn config\n", "state.lua": "local config = require(\"config\")\n\nlocal state = {\n  ws = nil,\n  connected = false,\n  status = \"Starting...\",\n\n  call = nil,\n  name = nil,\n\n  tab = \"chat\",          -- chat | dm | contacts | settings\n  room = config.DEFAULT_ROOM,\n  rooms = { config.DEFAULT_ROOM },\n\n  directory = {},\n\n  chatLogByRoom = {},\n  dmLogByPeer = {},\n  activePeer = nil,\n\n  input = \"\",\n  scroll = 0\n}\n\nlocal function ensureRoom(room)\n  if not state.chatLogByRoom[room] then state.chatLogByRoom[room] = {} end\nend\n\nlocal function pushRoom(room, line)\n  ensureRoom(room)\n  local log = state.chatLogByRoom[room]\n  log[#log+1] = line\n  if #log > (config.LOG_LIMIT or 200) then table.remove(log, 1) end\nend\n\nlocal function ensurePeer(peer)\n  peer = tostring(peer)\n  if not state.dmLogByPeer[peer] then state.dmLogByPeer[peer] = {} end\nend\n\nlocal function pushPeer(peer, line)\n  peer = tostring(peer)\n  ensurePeer(peer)\n  local log = state.dmLogByPeer[peer]\n  log[#log+1] = line\n  if #log > (config.LOG_LIMIT or 200) then table.remove(log, 1) end\nend\n\nreturn {\n  state = state,\n  ensureRoom = ensureRoom,\n  pushRoom = pushRoom,\n  ensurePeer = ensurePeer,\n  pushPeer = pushPeer\n}\n", "net.lua": "local config = require(\"config\")\nlocal S = require(\"state\")\nlocal state, pushRoom, pushPeer = S.state, S.pushRoom, S.pushPeer\n\nlocal function jencode(t) return textutils.serializeJSON(t) end\nlocal function jdecode(s) return textutils.unserializeJSON(s) end\n\n-- ----- persistent settings -----\nlocal settings = { deviceId = nil, call = nil, name = nil, lastPeer = nil }\n\nlocal function readFile(path)\n  if not fs.exists(path) then return nil end\n  local f = fs.open(path, \"r\"); if not f then return nil end\n  local s = f.readAll(); f.close(); return s\nend\n\nlocal function writeFile(path, s)\n  fs.makeDir(fs.getDir(path))\n  local f = fs.open(path, \"w\"); assert(f, \"Failed to write: \"..path)\n  f.write(s); f.close()\nend\n\nlocal function randHex(nbytes)\n  local chars = \"0123456789abcdef\"\n  local out = {}\n  for i=1,nbytes do\n    local v = math.random(0,255)\n    out[#out+1] = chars:sub((math.floor(v/16)+1),(math.floor(v/16)+1))\n    out[#out+1] = chars:sub(((v%16)+1),((v%16)+1))\n  end\n  return table.concat(out)\nend\n\nlocal function loadSettings()\n  local raw = readFile(config.SETTINGS_PATH)\n  if not raw then return end\n  local ok, obj = pcall(function() return textutils.unserializeJSON(raw) end)\n  if ok and type(obj) == \"table\" then\n    settings.deviceId = obj.deviceId or settings.deviceId\n    settings.call = obj.call or settings.call\n    settings.name = obj.name or settings.name\n    settings.lastPeer = obj.lastPeer or settings.lastPeer\n  end\nend\n\nlocal function saveSettings()\n  local out = {\n    deviceId = settings.deviceId,\n    call = settings.call,\n    name = settings.name,\n    lastPeer = settings.lastPeer\n  }\n  writeFile(config.SETTINGS_PATH, textutils.serializeJSON(out))\nend\n\nlocal function ensureDeviceId()\n  loadSettings()\n  if not settings.deviceId then\n    settings.deviceId = \"pc-\" .. randHex(12)\n    saveSettings()\n  end\nend\n\nlocal function setCall(call)\n  settings.call = call\n  saveSettings()\nend\n\nlocal function setLastPeer(peer)\n  settings.lastPeer = peer\n  saveSettings()\nend\n\nlocal function getDeviceId()\n  ensureDeviceId()\n  return settings.deviceId\nend\n\nlocal function getSavedName() return settings.name end\n\nlocal function setSavedName(n)\n  settings.name = n\n  saveSettings()\nend\n\n-- ----- ws helpers -----\nlocal function wsSend(obj)\n  if not state.ws or not state.connected then return false end\n  local ok = pcall(function() state.ws.send(jencode(obj)) end)\n  return ok\nend\n\nlocal function formatTs(ms)\n  local t = os.date(\"*t\", math.floor((ms or 0)/1000))\n  return string.format(\"%02d:%02d\", t.hour or 0, t.min or 0)\nend\n\nlocal function onServerMsg(msg, redraw)\n  if msg.t == \"hello\" then\n    state.call = msg.call\n    setCall(msg.call)\n\n    state.room = msg.defaultRoom or config.DEFAULT_ROOM\n    state.status = \"Assigned call #\" .. tostring(state.call) .. (msg.temporary and \" (TEMP)\" or \"\")\n    pushRoom(state.room, (\"[%s] * assigned call #%d\"):format(formatTs(msg.serverTime), state.call))\n\n    if settings.lastPeer and not state.activePeer then\n      state.activePeer = settings.lastPeer\n    end\n\n    redraw()\n    return\n  end\n\n  if msg.t == \"directory\" then\n    state.directory = msg.users or {}\n    redraw()\n    return\n  end\n\n  if msg.t == \"system\" then\n    pushRoom(msg.room or config.DEFAULT_ROOM, (\"[%s] * %s\"):format(formatTs(msg.ts), tostring(msg.text or \"\")))\n    redraw()\n    return\n  end\n\n  if msg.t == \"chat\" then\n    local room = msg.room or config.DEFAULT_ROOM\n    local from = tostring(msg.from or \"?\")\n    local name = tostring(msg.name or (\"User-\"..from))\n    local text = tostring(msg.text or \"\")\n    pushRoom(room, (\"[%s] %s(#%s): %s\"):format(formatTs(msg.ts), name, from, text))\n    redraw()\n    return\n  end\n\n  if msg.t == \"dm\" then\n    local from = msg.from\n    local to = msg.to\n    local name = tostring(msg.name or (\"User-\"..tostring(from)))\n    local text = tostring(msg.text or \"\")\n    local peer = (state.call == from) and to or from\n    pushPeer(peer, (\"[%s] %s(#%s): %s\"):format(formatTs(msg.ts), name, tostring(from), text))\n    redraw()\n    return\n  end\n\n  if msg.t == \"name_ok\" then\n    state.status = \"Name set.\"\n    redraw()\n    return\n  end\nend\n\nlocal function connect(redraw)\n  ensureDeviceId()\n\n  state.status = \"Connecting...\"\n  redraw()\n\n  if state.ws then pcall(function() state.ws.close() end) end\n  state.ws = nil\n  state.connected = false\n  state.call = nil\n\n  local ws\n  local ok, err = pcall(function() ws = http.websocket(config.URL) end)\n  if not ok or not ws then\n    state.status = \"Connect failed: \"..tostring(err)\n    redraw()\n    return false\n  end\n\n  state.ws = ws\n  state.connected = true\n  state.status = \"Connected. Identifying...\"\n  redraw()\n\n  local name = state.name or getSavedName()\n  wsSend({ t=\"identify\", deviceId=getDeviceId(), name=name })\n\n  return true\nend\n\nlocal function netLoop(redraw)\n  while true do\n    if not state.connected or not state.ws then\n      os.sleep(0.2)\n    else\n      local ok, msg = pcall(function() return state.ws.receive() end)\n      if not ok then\n        state.status = \"Socket error. Reconnecting...\"\n        state.connected = false\n        redraw()\n        os.sleep(0.5)\n        connect(redraw)\n      elseif msg then\n        local decoded = jdecode(msg)\n        if decoded then onServerMsg(decoded, redraw) end\n      else\n        state.status = \"Disconnected. Reconnecting...\"\n        state.connected = false\n        redraw()\n        os.sleep(0.5)\n        connect(redraw)\n      end\n    end\n  end\nend\n\nreturn {\n  wsSend = wsSend,\n  connect = connect,\n  netLoop = netLoop,\n  setSavedName = setSavedName,\n  setLastPeer = setLastPeer\n}\n", "ui.lua": "local config = require(\"config\")\nlocal S = require(\"state\")\nlocal state, ensureRoom, ensurePeer = S.state, S.ensureRoom, S.ensurePeer\n\nlocal ui = {}\n\nlocal buttons = {}\n\nlocal function clamp(n,a,b) if n<a then return a elseif n>b then return b else return n end end\nlocal function padRight(s,w) s=tostring(s or \"\"); if #s>=w then return s:sub(1,w) end; return s..string.rep(\" \", w-#s) end\nlocal function size() return term.getSize() end\n\nlocal function drawBox(x,y,w,h,bg)\n  term.setBackgroundColor(bg or colors.black)\n  for yy=y,y+h-1 do\n    term.setCursorPos(x,yy)\n    term.write(string.rep(\" \", w))\n  end\nend\n\nlocal function writeAt(x,y,s,fg,bg)\n  if fg then term.setTextColor(fg) end\n  if bg then term.setBackgroundColor(bg) end\n  term.setCursorPos(x,y)\n  term.write(s)\nend\n\nlocal function button(x,y,w,label,id,isActive)\n  local bg = isActive and colors.cyan or colors.gray\n  local fg = isActive and colors.black or colors.white\n  drawBox(x,y,w,1,bg)\n  local txt = label\n  if #txt > w then txt = txt:sub(1,w) end\n  local px = x + math.floor((w-#txt)/2)\n  writeAt(px,y,txt,fg,bg)\n  return { id=id, x=x, y=y, w=w, h=1 }\nend\n\nlocal function setButtons(list) buttons = list end\nfunction ui.hit(px,py)\n  for _,b in ipairs(buttons) do\n    if px>=b.x and px<b.x+b.w and py>=b.y and py<b.y+b.h then return b.id end\n  end\n  return nil\nend\n\nlocal function getLogLines()\n  local w,h = size()\n  local top, bottom = 5, h-2\n  local avail = bottom-top+1\n\n  if state.tab == \"chat\" then\n    ensureRoom(state.room)\n    local log = state.chatLogByRoom[state.room]\n    local total = #log\n    local start = clamp(total - avail - state.scroll + 1, 1, math.max(total,1))\n    local stop = clamp(start + avail - 1, 1, total)\n    return log, start, stop, top, bottom\n  elseif state.tab == \"dm\" then\n    if not state.activePeer then return {},1,0,top,bottom end\n    ensurePeer(state.activePeer)\n    local log = state.dmLogByPeer[tostring(state.activePeer)]\n    local total = #log\n    local start = clamp(total - avail - state.scroll + 1, 1, math.max(total,1))\n    local stop = clamp(start + avail - 1, 1, total)\n    return log, start, stop, top, bottom\n  end\n\n  return {},1,0,top,bottom\nend\n\nfunction ui.redraw()\n  local w,h = size()\n  term.setBackgroundColor(colors.black)\n  term.setTextColor(colors.white)\n  term.clear()\n\n  local btns = {}\n\n  drawBox(1,1,w,1,colors.lightGray)\n  writeAt(2,1,\"VibeChat\",colors.black,colors.lightGray)\n  local right = state.connected and (\"#\"..tostring(state.call or \"?\")) or \"OFFLINE\"\n  writeAt(w-#right,1,right,state.connected and colors.green or colors.red,colors.lightGray)\n\n  local tabW = math.floor(w/4)\n  btns[#btns+1] = button(1,2,tabW,\"CHAT\",\"tab_chat\",state.tab==\"chat\")\n  btns[#btns+1] = button(1+tabW,2,tabW,\"DM\",\"tab_dm\",state.tab==\"dm\")\n  btns[#btns+1] = button(1+tabW*2,2,tabW,\"CONTACTS\",\"tab_contacts\",state.tab==\"contacts\")\n  btns[#btns+1] = button(1+tabW*3,2,w-(tabW*3),\"SETTINGS\",\"tab_settings\",state.tab==\"settings\")\n\n  drawBox(1,3,w,1,colors.black)\n  writeAt(1,3,string.rep(\"-\", w), colors.gray, colors.black)\n\n  if state.tab == \"chat\" then\n    local x = 1\n    local btnW = math.max(8, math.floor(w/3))\n    for i, room in ipairs(config.QUICK_ROOMS) do\n      local ww = (i == #config.QUICK_ROOMS) and (w-x+1) or btnW\n      btns[#btns+1] = button(x,4,ww,room:sub(2):upper(),\"room_\"..room,state.room==room)\n      x = x + ww\n      if x > w then break end\n    end\n  elseif state.tab == \"dm\" then\n    local half = math.floor(w/2)\n    btns[#btns+1] = button(1,4,half,\"PICK DM\",\"dm_pick\",false)\n    btns[#btns+1] = button(1+half,4,w-half,\"CLEAR\",\"dm_clear\",false)\n  elseif state.tab == \"contacts\" then\n    btns[#btns+1] = button(1,4,w,\"REFRESH\",\"contacts_refresh\",false)\n  elseif state.tab == \"settings\" then\n    local half = math.floor(w/2)\n    btns[#btns+1] = button(1,4,half,\"SET NAME\",\"set_name\",false)\n    btns[#btns+1] = button(1+half,4,w-half,\"RECONNECT\",\"reconnect\",false)\n  end\n\n  local top, bottom = 5, h-2\n  drawBox(1,top,w,bottom-top+1,colors.black)\n\n  if state.tab == \"chat\" or state.tab == \"dm\" then\n    local log, start, stop = getLogLines()\n    local y = top\n    for i=start, stop do\n      local line = tostring(log[i] or \"\")\n      if #line > w then line = line:sub(1,w) end\n      writeAt(1,y,padRight(line,w),colors.white,colors.black)\n      y = y + 1\n    end\n  elseif state.tab == \"contacts\" then\n    writeAt(1,top,padRight(\" Online users (tap to DM) \",w),colors.black,colors.lightGray)\n    local y = top + 1\n    for _,u in ipairs(state.directory) do\n      if y > bottom then break end\n      local label = string.format(\" #%d  %s\", u.call, u.name or (\"User-\"..u.call))\n      writeAt(1,y,padRight(label,w),colors.white,colors.black)\n      y = y + 1\n    end\n  elseif state.tab == \"settings\" then\n    writeAt(1,top,padRight(\" Settings \",w),colors.black,colors.lightGray)\n    writeAt(1,top+1,padRight(\"ESC clears input. PgUp/PgDn scroll.\",w),colors.gray,colors.black)\n    writeAt(1,top+3,padRight(\"Name: \"..tostring(state.name or (\"User-\"..tostring(state.call or \"?\"))),w),colors.white,colors.black)\n    writeAt(1,top+4,padRight(\"Connected: \"..tostring(state.connected),w),colors.white,colors.black)\n  end\n\n  drawBox(1,h-1,w,1,colors.black)\n  local prompt = \"> \"\n  local roomInfo = \"\"\n  if state.tab == \"chat\" then roomInfo = \" \"..tostring(state.room or \"#?\") end\n  if state.tab == \"dm\" then roomInfo = \" DM:\"..tostring(state.activePeer or \"?\") end\n\n  local show = prompt .. tostring(state.input or \"\")\n  if #show > w-#roomInfo then show = show:sub(#show-(w-#roomInfo)+1) end\n  writeAt(1,h-1,padRight(show,w-#roomInfo),colors.white,colors.black)\n  if #roomInfo > 0 then writeAt(w-#roomInfo+1,h-1,roomInfo,colors.cyan,colors.black) end\n\n  drawBox(1,h,w,1,colors.black)\n  writeAt(1,h,padRight(tostring(state.status or \"\"),w),colors.lightGray,colors.black)\n\n  setButtons(btns)\nend\n\nreturn ui\n", "main.lua": "local config = require(\"config\")\nlocal S = require(\"state\")\nlocal state = S.state\nlocal net = require(\"net\")\nlocal ui = require(\"ui\")\n\nlocal function redraw() ui.redraw() end\n\nlocal function setTab(t)\n  state.tab = t\n  state.scroll = 0\n  state.status = \"Tab: \"..t\n  redraw()\nend\n\nlocal function setActivePeer(call)\n  state.activePeer = call\n  state.scroll = 0\n  state.status = \"DM with #\"..tostring(call)\n  net.setLastPeer(call)\n  redraw()\nend\n\nlocal function promptText(title)\n  state.status = title\n  state.input = \"\"\n  redraw()\n\n  while true do\n    local e,a,b,c = os.pullEvent()\n    if e == \"char\" then\n      state.input = state.input .. a\n      redraw()\n    elseif e == \"key\" then\n      if a == keys.backspace then\n        state.input = state.input:sub(1, math.max(#state.input-1, 0))\n        redraw()\n      elseif a == keys.enter then\n        local out = state.input\n        state.input = \"\"\n        redraw()\n        return out\n      elseif a == keys.escape then\n        state.input = \"\"\n        redraw()\n        return nil\n      end\n    end\n  end\nend\n\nlocal function joinRoom(room)\n  if not room:match(\"^#\") then room = \"#\" .. room end\n  net.wsSend({ t=\"join\", room=room })\n  state.room = room\n  state.scroll = 0\n  state.status = \"Joining \"..room\n  redraw()\nend\n\nlocal function sendCurrentInput()\n  local text = tostring(state.input or \"\"):gsub(\"^%s+\",\"\"):gsub(\"%s+$\",\"\")\n  state.input = \"\"\n  if text == \"\" then redraw(); return end\n  if #text > config.MAX_TEXT then text = text:sub(1, config.MAX_TEXT) end\n\n  if state.tab == \"chat\" then\n    net.wsSend({ t=\"chat\", room=state.room, text=text })\n  elseif state.tab == \"dm\" then\n    if state.activePeer then\n      net.wsSend({ t=\"dm\", to=state.activePeer, text=text })\n    else\n      state.status = \"Pick a DM target first.\"\n    end\n  else\n    state.status = \"Type in Chat or DM tab.\"\n  end\n  redraw()\nend\n\nlocal function uiTap(x,y)\n  local id = ui.hit(x,y)\n\n  if not id then\n    if state.tab == \"contacts\" then\n      local w,h = term.getSize()\n      local top, bottom = 5, h-2\n      if y >= top+1 and y <= bottom then\n        local idx = (y - (top+1)) + 1\n        local u = state.directory[idx]\n        if u and state.call and u.call ~= state.call then\n          setTab(\"dm\")\n          setActivePeer(u.call)\n        end\n      end\n    end\n    return\n  end\n\n  if id == \"tab_chat\" then return setTab(\"chat\") end\n  if id == \"tab_dm\" then return setTab(\"dm\") end\n  if id == \"tab_contacts\" then return setTab(\"contacts\") end\n  if id == \"tab_settings\" then return setTab(\"settings\") end\n\n  if id:match(\"^room_\") then\n    local room = id:sub(6)\n    return joinRoom(room)\n  end\n\n  if id == \"dm_pick\" then\n    local s = promptText(\"Enter call # to DM (ESC cancel)\")\n    if not s then state.status=\"Cancelled\"; return redraw() end\n    local n = tonumber(s)\n    if n then setActivePeer(n) else state.status=\"Not a number.\"; redraw() end\n    return\n  end\n\n  if id == \"dm_clear\" then\n    if state.activePeer then\n      S.state.dmLogByPeer[tostring(state.activePeer)] = {}\n      state.status = \"DM cleared.\"\n      redraw()\n    end\n    return\n  end\n\n  if id == \"set_name\" then\n    local s = promptText(\"Set name (ESC cancel)\")\n    if not s then state.status=\"Cancelled\"; return redraw() end\n    s = s:gsub(\"^%s+\",\"\"):gsub(\"%s+$\",\"\")\n    net.wsSend({ t=\"set_name\", name=s })\n    net.setSavedName(s)\n    state.name = s\n    state.status = \"Setting name...\"\n    return redraw()\n  end\n\n  if id == \"reconnect\" then\n    return net.connect(redraw)\n  end\nend\n\nlocal function uiLoop()\n  redraw()\n  while true do\n    local e,a,b,c = os.pullEvent()\n    if e == \"term_resize\" then redraw()\n    elseif e == \"mouse_click\" then uiTap(b,c)\n    elseif e == \"mouse_scroll\" then\n      if a == 1 then state.scroll = state.scroll + 3 else state.scroll = math.max(0, state.scroll - 3) end\n      redraw()\n    elseif e == \"char\" then\n      state.input = state.input .. a\n      redraw()\n    elseif e == \"key\" then\n      if a == keys.backspace then\n        state.input = state.input:sub(1, math.max(#state.input-1, 0)); redraw()\n      elseif a == keys.enter then\n        sendCurrentInput()\n      elseif a == keys.pageUp then\n        state.scroll = state.scroll + 3; redraw()\n      elseif a == keys.pageDown then\n        state.scroll = math.max(0, state.scroll - 3); redraw()\n      elseif a == keys.escape then\n        state.input = \"\"; state.status=\"Cleared input.\"; redraw()\n      end\n    end\n  end\nend\n\nterm.setBackgroundColor(colors.black)\nterm.setTextColor(colors.white)\nterm.clear()\n\nnet.connect(redraw)\nparallel.waitForAny(function() net.netLoop(redraw) end, uiLoop)\n"}}, {"id": "calculator", "name": "Calculator", "version": "1.0.0", "description": "Simple calculator app (stub).", "installBase": "/vibephone/apps/calculator", "files": {"app.lua": "print(\"Calculator from AppStore (placeholder)\")\nos.pullEvent(\"key\")\n"}}, {"id": "controller", "name": "Controller", "version": "1.0.0", "description": "Controller app (stub).", "installBase": "/vibephone/apps/controller", "files": {"app.lua": "print(\"Controller from AppStore (placeholder)\")\nos.pullEvent(\"key\")\n"}}]);
+// IMPORTANT: appstore module must export BOTH AppStore and registerAppStore
+const { AppStore, registerAppStore } = require("./appstore");
 
-const { server, port, directWss } = makeServer();
+// ---- your current in-memory AppStore payload ----
+const APPSTORE = new AppStore([
+  {
+    id: "vibechat",
+    name: "VibeChat",
+    version: "1.0.0",
+    description: "Realtime chat + DMs (client bundle).",
+    installBase: "/vcchat",
+    files: {
+      "config.lua": `local config = {}
+
+config.URL = "ws://192.168.5.2:8080" -- change as needed
+config.DEFAULT_ROOM = "#lobby"
+
+config.LOG_LIMIT = 200
+config.MAX_TEXT = 240
+
+config.QUICK_ROOMS = { "#lobby", "#general", "#trade" }
+
+config.SETTINGS_PATH = "/vcchat/settings.json"
+
+return config
+`,
+      "state.lua": `local config = require("config")
+
+local state = {
+  ws = nil,
+  connected = false,
+  status = "Starting...",
+
+  call = nil,
+  name = nil,
+
+  tab = "chat",          -- chat | dm | contacts | settings
+  room = config.DEFAULT_ROOM,
+  rooms = { config.DEFAULT_ROOM },
+
+  directory = {},
+
+  chatLogByRoom = {},
+  dmLogByPeer = {},
+  activePeer = nil,
+
+  input = "",
+  scroll = 0
+}
+
+local function ensureRoom(room)
+  if not state.chatLogByRoom[room] then state.chatLogByRoom[room] = {} end
+end
+
+local function pushRoom(room, line)
+  ensureRoom(room)
+  local log = state.chatLogByRoom[room]
+  log[#log+1] = line
+  if #log > (config.LOG_LIMIT or 200) then table.remove(log, 1) end
+end
+
+local function ensurePeer(peer)
+  peer = tostring(peer)
+  if not state.dmLogByPeer[peer] then state.dmLogByPeer[peer] = {} end
+end
+
+local function pushPeer(peer, line)
+  peer = tostring(peer)
+  ensurePeer(peer)
+  local log = state.dmLogByPeer[peer]
+  log[#log+1] = line
+  if #log > (config.LOG_LIMIT or 200) then table.remove(log, 1) end
+end
+
+return {
+  state = state,
+  ensureRoom = ensureRoom,
+  pushRoom = pushRoom,
+  ensurePeer = ensurePeer,
+  pushPeer = pushPeer
+}
+`,
+      "net.lua": `local config = require("config")
+local S = require("state")
+local state, pushRoom, pushPeer = S.state, S.pushRoom, S.pushPeer
+
+local function jencode(t) return textutils.serializeJSON(t) end
+local function jdecode(s) return textutils.unserializeJSON(s) end
+
+-- ----- persistent settings -----
+local settings = { deviceId = nil, call = nil, name = nil, lastPeer = nil }
+
+local function readFile(path)
+  if not fs.exists(path) then return nil end
+  local f = fs.open(path, "r"); if not f then return nil end
+  local s = f.readAll(); f.close(); return s
+end
+
+local function writeFile(path, s)
+  fs.makeDir(fs.getDir(path))
+  local f = fs.open(path, "w"); assert(f, "Failed to write: "..path)
+  f.write(s); f.close()
+end
+
+local function randHex(nbytes)
+  local chars = "0123456789abcdef"
+  local out = {}
+  for i=1,nbytes do
+    local v = math.random(0,255)
+    out[#out+1] = chars:sub((math.floor(v/16)+1),(math.floor(v/16)+1))
+    out[#out+1] = chars:sub(((v%16)+1),((v%16)+1))
+  end
+  return table.concat(out)
+end
+
+local function loadSettings()
+  local raw = readFile(config.SETTINGS_PATH)
+  if not raw then return end
+  local ok, obj = pcall(function() return textutils.unserializeJSON(raw) end)
+  if ok and type(obj) == "table" then
+    settings.deviceId = obj.deviceId or settings.deviceId
+    settings.call = obj.call or settings.call
+    settings.name = obj.name or settings.name
+    settings.lastPeer = obj.lastPeer or settings.lastPeer
+  end
+end
+
+local function saveSettings()
+  local out = {
+    deviceId = settings.deviceId,
+    call = settings.call,
+    name = settings.name,
+    lastPeer = settings.lastPeer
+  }
+  writeFile(config.SETTINGS_PATH, textutils.serializeJSON(out))
+end
+
+local function ensureDeviceId()
+  loadSettings()
+  if not settings.deviceId then
+    settings.deviceId = "pc-" .. randHex(12)
+    saveSettings()
+  end
+end
+
+local function setCall(call)
+  settings.call = call
+  saveSettings()
+end
+
+local function setLastPeer(peer)
+  settings.lastPeer = peer
+  saveSettings()
+end
+
+local function getDeviceId()
+  ensureDeviceId()
+  return settings.deviceId
+end
+
+local function getSavedName() return settings.name end
+
+local function setSavedName(n)
+  settings.name = n
+  saveSettings()
+end
+
+-- ----- ws helpers -----
+local function wsSend(obj)
+  if not state.ws or not state.connected then return false end
+  local ok = pcall(function() state.ws.send(jencode(obj)) end)
+  return ok
+end
+
+local function formatTs(ms)
+  local t = os.date("*t", math.floor((ms or 0)/1000))
+  return string.format("%02d:%02d", t.hour or 0, t.min or 0)
+end
+
+local function onServerMsg(msg, redraw)
+  if msg.t == "hello" then
+    state.call = msg.call
+    setCall(msg.call)
+
+    state.room = msg.defaultRoom or config.DEFAULT_ROOM
+    state.status = "Assigned call #" .. tostring(state.call) .. (msg.temporary and " (TEMP)" or "")
+    pushRoom(state.room, ("[%s] * assigned call #%d"):format(formatTs(msg.serverTime), state.call))
+
+    if settings.lastPeer and not state.activePeer then
+      state.activePeer = settings.lastPeer
+    end
+
+    redraw()
+    return
+  end
+
+  if msg.t == "directory" then
+    state.directory = msg.users or {}
+    redraw()
+    return
+  end
+
+  if msg.t == "system" then
+    pushRoom(msg.room or config.DEFAULT_ROOM, ("[%s] * %s"):format(formatTs(msg.ts), tostring(msg.text or "")))
+    redraw()
+    return
+  end
+
+  if msg.t == "chat" then
+    local room = msg.room or config.DEFAULT_ROOM
+    local from = tostring(msg.from or "?")
+    local name = tostring(msg.name or ("User-"..from))
+    local text = tostring(msg.text or "")
+    pushRoom(room, ("[%s] %s(#%s): %s"):format(formatTs(msg.ts), name, from, text))
+    redraw()
+    return
+  end
+
+  if msg.t == "dm" then
+    local from = msg.from
+    local to = msg.to
+    local name = tostring(msg.name or ("User-"..tostring(from)))
+    local text = tostring(msg.text or "")
+    local peer = (state.call == from) and to or from
+    pushPeer(peer, ("[%s] %s(#%s): %s"):format(formatTs(msg.ts), name, tostring(from), text))
+    redraw()
+    return
+  end
+
+  if msg.t == "name_ok" then
+    state.status = "Name set."
+    redraw()
+    return
+  end
+end
+
+local function connect(redraw)
+  ensureDeviceId()
+
+  state.status = "Connecting..."
+  redraw()
+
+  if state.ws then pcall(function() state.ws.close() end) end
+  state.ws = nil
+  state.connected = false
+  state.call = nil
+
+  local ws
+  local ok, err = pcall(function() ws = http.websocket(config.URL) end)
+  if not ok or not ws then
+    state.status = "Connect failed: "..tostring(err)
+    redraw()
+    return false
+  end
+
+  state.ws = ws
+  state.connected = true
+  state.status = "Connected. Identifying..."
+  redraw()
+
+  local name = state.name or getSavedName()
+  wsSend({ t="identify", deviceId=getDeviceId(), name=name })
+
+  return true
+end
+
+local function netLoop(redraw)
+  while true do
+    if not state.connected or not state.ws then
+      os.sleep(0.2)
+    else
+      local ok, msg = pcall(function() return state.ws.receive() end)
+      if not ok then
+        state.status = "Socket error. Reconnecting..."
+        state.connected = false
+        redraw()
+        os.sleep(0.5)
+        connect(redraw)
+      elseif msg then
+        local decoded = jdecode(msg)
+        if decoded then onServerMsg(decoded, redraw) end
+      else
+        state.status = "Disconnected. Reconnecting..."
+        state.connected = false
+        redraw()
+        os.sleep(0.5)
+        connect(redraw)
+      end
+    end
+  end
+end
+
+return {
+  wsSend = wsSend,
+  connect = connect,
+  netLoop = netLoop,
+  setSavedName = setSavedName,
+  setLastPeer = setLastPeer
+}
+`,
+      "ui.lua": `-- unchanged (your existing ui.lua)`,
+      "main.lua": `-- unchanged (your existing main.lua)`
+    }
+  },
+  {
+    id: "calculator",
+    name: "Calculator",
+    version: "1.0.0",
+    description: "Simple calculator app (stub).",
+    installBase: "/vibephone/apps/calculator",
+    files: { "app.lua": 'print("Calculator from AppStore (placeholder)")\\nos.pullEvent("key")\\n' }
+  },
+  {
+    id: "controller",
+    name: "Controller",
+    version: "1.0.0",
+    description: "Controller app (stub).",
+    installBase: "/vibephone/apps/controller",
+    files: { "app.lua": 'print("Controller from AppStore (placeholder)")\\nos.pullEvent("key")\\n' }
+  }
+]);
+
+// ---- server + ws ----
+const { app, server, port, directWss } = makeServer();
 const wss = new WebSocket.Server({ server });
 
-function identifyOrTemp(ws, WebSocket) {
+// ✅ registers HTTP endpoints for AppStore (and optional WS helpers, depending on your appstore.js)
+registerAppStore(app, wss, APPSTORE);
+
+// ---- identify fallback ----
+function identifyOrTemp(ws) {
   const tempCall = Math.floor(900000 + Math.random() * 90000);
   addClient(ws, tempCall, null);
   joinRoom(ws, "#lobby");
@@ -26,14 +350,14 @@ wss.on("connection", (ws) => {
   let identified = false;
 
   const timer = setTimeout(() => {
-    if (!identified && !getClient(ws)) identifyOrTemp(ws, WebSocket);
+    if (!identified && !getClient(ws)) identifyOrTemp(ws);
   }, 5000);
 
   ws.on("message", (data) => {
     const msg = safeJsonParse(String(data));
     if (!msg || typeof msg.t !== "string") return;
 
-    // AppStore calls are allowed even before identify (so you can update installs from a blank device)
+    // AppStore calls are allowed even before identify
     if (msg.t === "apps_list" || msg.t === "app_fetch") {
       APPSTORE.handle(ws, msg, WebSocket);
       return;
@@ -76,4 +400,5 @@ wss.on("connection", (ws) => {
 server.listen(port, "0.0.0.0", () => {
   console.log(`${directWss ? "WSS" : "WS"} server listening on :${port}`);
   console.log("AppStore: apps_list/app_fetch available over same socket.");
+  console.log("AppStore HTTP: /api/apps , /api/apps/:id/manifest , /api/apps/:id/file/<path>");
 });

@@ -17,7 +17,7 @@ config.ANIM_FPS = 12
 config.ANIM_SECONDS = 1.8
 
 -- AppStore (same server as chat)
-config.APPSTORE_WS_URL = "ws://192.168.5.2:8080"
+config.APPSTORE_WS_URL = "ws://15.204.199.112:8080"
 
 -- Theme colors
 config.C_BG = colors.black

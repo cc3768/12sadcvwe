@@ -1,0 +1,11 @@
+dofile("/vibephone/require_shim.lua")
+term.setBackgroundColor(colors.black)
+term.setTextColor(colors.white)
+term.clear()
+term.setCursorPos(1,1)
+
+print("Calculator (local placeholder)")
+print("Install/update Calculator from App Store.")
+print("")
+print("Press any key...")
+os.pullEvent("key")

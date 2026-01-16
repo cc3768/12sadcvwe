@@ -1,0 +1,12 @@
+{
+  "name": "vc-wss-chat-server",
+  "version": "1.2.0",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

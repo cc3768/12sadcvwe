@@ -1,0 +1,113 @@
+.phoneWrap{
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+
+.phone{
+  width:min(420px, 96vw);
+  height:min(860px, 92vh);
+  border-radius:34px;
+  border:1px solid rgba(92,200,255,.28);
+  background:linear-gradient(180deg, rgba(16,24,36,.92), rgba(12,18,30,.94));
+  box-shadow:
+    0 30px 120px rgba(0,0,0,.65),
+    0 0 0 1px rgba(255,255,255,.04) inset,
+    0 0 60px rgba(92,200,255,.08);
+  backdrop-filter: blur(12px);
+  position:relative;
+  overflow:hidden;
+}
+
+.wallpaper{
+  position:absolute; inset:0;
+  background:
+    radial-gradient(900px 600px at 15% 10%, rgba(92,200,255,.20), rgba(0,0,0,0)),
+    radial-gradient(900px 600px at 85% 25%, rgba(255,92,122,.10), rgba(0,0,0,0)),
+    radial-gradient(900px 600px at 40% 85%, rgba(92,255,182,.10), rgba(0,0,0,0));
+  z-index:0;
+}
+
+.statusBar{
+  height:44px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:0 14px;
+  border-bottom:1px solid rgba(28,42,61,.9);
+  background:rgba(10,16,25,.55);
+  backdrop-filter: blur(10px);
+  position:relative;
+  z-index:2;
+}
+
+.sbLeft{font-weight:700; letter-spacing:.5px}
+.sbRight{display:flex; align-items:center; gap:8px}
+.sbPill{
+  font-size:12px;
+  padding:4px 8px;
+  border-radius:999px;
+  border:1px solid rgba(92,200,255,.35);
+  color:var(--accent);
+  background:rgba(92,200,255,.08);
+}
+
+.appArea{
+  position:relative;
+  z-index:1;
+  height:calc(100% - 44px);
+  display:flex;
+  flex-direction:column;
+  padding:14px;
+  gap:10px;
+}
+
+.appHeader{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.appHeader .left{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.hBtn{
+  border:1px solid rgba(28,42,61,.9);
+  background:rgba(11,18,32,.65);
+  color:var(--text);
+  padding:10px 12px;
+  border-radius:14px;
+}
+.hBtn:hover{ border-color:rgba(92,200,255,.45); }
+
+.hBtn:active{ transform: translateY(1px); }
+
+.titleBlock .title{ font-weight:900; font-size:16px; }
+.titleBlock .sub{ color:var(--muted); font-size:12px; margin-top:2px; }
+
+.pill{
+  padding:6px 10px;
+  border-radius:999px;
+  border:1px solid rgba(28,42,61,.9);
+  background:rgba(11,18,32,.65);
+  color:var(--muted);
+  font-size:12px;
+}
+
+.card{
+  border:1px solid rgba(28,42,61,.9);
+  background:rgba(11,18,32,.65);
+  border-radius:18px;
+  padding:12px;
+}
+
+.scroll{
+  overflow:auto;
+  min-height:0; /* critical: prevents stacking/overflow bugs */
+}

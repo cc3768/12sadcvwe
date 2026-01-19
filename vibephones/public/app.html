@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>VibePhone</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 24px; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .card { border:1px solid #ddd; border-radius:12px; padding:16px; max-width:780px; }
+    pre { background:#f6f6f6; padding:12px; border-radius:10px; overflow:auto; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #ccc; cursor:pointer; }
+    .muted { color:#666; }
+    .big { font-size:20px; font-weight:700; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <h1>VibePhone</h1>
+    <button id="logoutBtn">Logout</button>
+  </div>
+
+  <div class="card">
+    <div class="big" id="title">Loading…</div>
+    <div class="muted" id="sub"></div>
+
+    <h3>Identify payload</h3>
+    <pre id="payload">{}</pre>
+
+    <div class="muted" style="margin-top:10px">
+      Cached locally: <span id="cacheState">no</span>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "vibephone.identity";
+
+    function setCacheState(on) {
+      document.getElementById("cacheState").textContent = on ? "yes" : "no";
+    }
+
+    function buildIdentifyPayload(phone) {
+      return {
+        t: "identify",
+        call: phone.call ?? 0,
+        key: phone.key,
+        deviceId: phone.deviceId,
+        name: phone.name || "Optional",
+      };
+    }
+
+    async function fetchPhone() {
+      const r = await fetch("/api/phone", { credentials: "include" });
+      if (r.status === 401) {
+        location.href = "/auth/google";
+        return null;
+      }
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "api/phone failed");
+      return j.phone;
+    }
+
+    async function main() {
+      // Prefer cached identity for instant UI, then refresh from server
+      let cached = null;
+      try {
+        cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+      } catch {}
+      if (cached?.key && cached?.deviceId) {
+        render(cached);
+        setCacheState(true);
+      } else {
+        setCacheState(false);
+      }
+
+      // Always refresh from the website (source of truth)
+      const phone = await fetchPhone();
+      if (!phone) return;
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(phone));
+      setCacheState(true);
+      render(phone);
+    }
+
+    function render(phone) {
+      document.getElementById("title").textContent = `Phone Key: ${phone.key}`;
+      document.getElementById("sub").textContent = `Device ID: ${phone.deviceId}`;
+
+      const payload = buildIdentifyPayload(phone);
+      document.getElementById("payload").textContent = JSON.stringify(payload, null, 2);
+    }
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  await fetch("/auth/logout", { method: "POST", credentials: "include" });
+  localStorage.removeItem("vibephone.identity");
+  location.href = "/";
+});
+
+
+    main().catch(e => {
+      document.getElementById("title").textContent = "Error";
+      document.getElementById("sub").textContent = String(e?.message || e);
+    });
+  </script>
+</body>
+</html>

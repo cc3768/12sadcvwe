@@ -1,0 +1,41 @@
+.chatWrap{ display:flex; flex-direction:column; gap:14px; padding:18px; }
+.chatTopRow{ display:flex; gap:14px; align-items:stretch; }
+.chatRooms,.chatDirectory{ flex:1; padding:16px; }
+.list{ display:flex; flex-direction:column; gap:8px; }
+.list button{
+  text-align:left;
+  padding:12px 14px;
+  border-radius:14px;
+  border:1px solid rgba(28,42,61,.9);
+  background:rgba(11,18,32,.55);
+  color:var(--text);
+  font-weight:800;
+  cursor:pointer;
+}
+.list button.active{ outline:2px solid rgba(28,108,255,.5); }
+.messages{ padding:0; overflow:hidden; }
+.messages.scroll{ height:360px; overflow:auto; padding:14px; }
+.msg{ padding:10px 12px; border-bottom:1px solid rgba(28,42,61,.65); }
+.msg.system .who{ color:rgba(151,198,255,.95); }
+.msg .meta{ display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--muted); margin-bottom:4px; }
+.msg .who{ font-weight:900; color:var(--text); }
+.msg .body{ font-size:14px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.composer{ display:flex; gap:10px; }
+.composer input{
+  flex:1;
+  padding:14px 14px;
+  border-radius:14px;
+  border:1px solid rgba(28,42,61,.9);
+  background:rgba(11,18,32,.55);
+  color:var(--text);
+  outline:none;
+}
+.composer button{
+  border:0;
+  background:linear-gradient(180deg,#1c6cff,#1747d9);
+  color:white;
+  padding:0 18px;
+  border-radius:14px;
+  font-weight:900;
+  cursor:pointer;
+}

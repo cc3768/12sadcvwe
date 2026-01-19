@@ -1,0 +1,57 @@
+/* Home (app launcher) */
+
+.homeWrap{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  padding:6px;
+}
+
+.cardTitle{
+  font-weight:950;
+  letter-spacing:.2px;
+  margin-bottom:10px;
+}
+
+.grid{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:10px;
+}
+
+.appBtn{
+  border:1px solid rgba(28,42,61,.9);
+  background:
+    radial-gradient(700px 250px at 20% 0%, rgba(92,200,255,.12), rgba(0,0,0,0)),
+    rgba(11,18,32,.55);
+  color:var(--text);
+  border-radius:16px;
+  padding:14px 12px;
+  font-weight:950;
+  text-align:left;
+  position:relative;
+  overflow:hidden;
+}
+
+.appBtn::after{
+  content:"";
+  position:absolute;
+  inset:-1px;
+  border-radius:16px;
+  background:linear-gradient(135deg, rgba(92,200,255,.18), rgba(255,92,122,.10), rgba(92,255,182,.10));
+  opacity:0;
+  pointer-events:none;
+}
+
+.appBtn:hover{
+  border-color: rgba(92,200,255,.55);
+}
+
+.appBtn:hover::after{ opacity:1; }
+
+.appBtn:active{ transform: translateY(1px); }
+
+/* Small screens: make grid 1 column */
+@media (max-width: 380px){
+  .grid{ grid-template-columns: 1fr; }
+}

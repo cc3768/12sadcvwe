@@ -1,0 +1,23 @@
+/* Notes */
+
+.notesWrap{ display:flex; flex-direction:column; gap:12px; padding:6px; }
+
+.notesArea{
+  width:100%;
+  min-height:320px;
+  resize:vertical;
+  padding:12px 12px;
+  border-radius:16px;
+  border:1px solid rgba(28,42,61,.9);
+  background:rgba(11,18,32,.55);
+  color:var(--text);
+  outline:none;
+}
+
+.notesArea:focus{
+  border-color: rgba(92,200,255,.55);
+  box-shadow: 0 0 0 3px rgba(92,200,255,.12);
+}
+
+.notesRow{ display:flex; gap:10px; }
+.notesRow .btn{ flex:1; }

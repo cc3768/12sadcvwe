@@ -1,0 +1,16 @@
+{
+  "id": "vibechat",
+  "name": "VibeChat",
+  "version": "1.0.1",
+  "description": "Realtime chat + DMs.",
+  "entry": "main.lua",
+  "installBase": "/vibephone/apps/vibechat",
+  "files": [
+    "main.lua",
+    "ui.lua",
+    "net.lua",
+    "state.lua",
+    "config.lua",
+    "require_shim.lua"
+  ]
+}

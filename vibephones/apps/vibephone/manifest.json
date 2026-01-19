@@ -1,0 +1,20 @@
+{
+  "id": "vibephone",
+  "name": "VibePhone",
+  "version": "1.0.1",
+  "description": "Home screen + PIN + app launcher.",
+  "entry": "main.lua",
+  "installBase": "/vibephone",
+  "files": [
+    "main.lua",
+    "config.lua",
+    "ui.lua",
+    "apps.lua",
+    "require_shim.lua",
+    "storage.lua",
+
+    "screens/lock.lua",
+    "screens/home.lua",
+    "screens/settings.lua"
+  ]
+}

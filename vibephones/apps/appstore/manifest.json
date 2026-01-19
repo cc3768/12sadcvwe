@@ -1,0 +1,11 @@
+{
+  "id": "appstore",
+  "name": "App Store",
+  "version": "1.0.0",
+  "description": "App store for installing and managing apps.",
+  "entry": "app.lua",
+  "installBase": "/vibephone/apps/appstore",
+  "files": [
+    "app.lua"
+  ]
+}

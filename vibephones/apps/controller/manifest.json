@@ -1,0 +1,11 @@
+{
+  "id": "controller",
+  "name": "CTRL",
+  "version": "1.0.0",
+  "description": "Control panel app (sends control events over WS).",
+  "entry": "app.lua",
+  "installBase": "/vibephone/apps/controller",
+  "files": [
+    "app.lua"
+  ]
+}

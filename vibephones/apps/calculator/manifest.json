@@ -1,0 +1,11 @@
+{
+  "id": "calculator",
+  "name": "Calculator",
+  "version": "1.0.0",
+  "description": "Calculator app.",
+  "entry": "app.lua",
+  "installBase": "/vibephone/apps/calculator",
+  "files": [
+    "app.lua"
+  ]
+}

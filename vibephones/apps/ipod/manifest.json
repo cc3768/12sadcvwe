@@ -1,0 +1,9 @@
+{
+  "id": "ipod",
+  "name": "VibePod",
+  "version": "2.1.0",
+  "description": "Search + play audio via dfpwm streaming API.",
+  "entry": "app.lua",
+  "installBase": "/vibephone/apps/ipod",
+  "files": ["app.lua", "config.lua"]
+}

@@ -1,0 +1,447 @@
+local cfg = require("config")
+local ui  = require("ui_common")
+
+local M = {}
+
+-- =========================
+-- STATE
+-- =========================
+
+M.state = {
+  groupOpen = {
+    Armor   = false,
+    Tools   = true,
+    Weapons = false,
+    Ranged  = false,
+    Jewelry = false,
+  },
+  groupSelected = "Tools",
+  tool = nil,
+  grade = nil,
+  parts = {}, -- part -> material
+  submit = false,
+}
+
+local hits = {}
+
+-- =========================
+-- HELPERS
+-- =========================
+
+local function uiColor(key, fallback)
+  return (cfg.ui and cfg.ui[key]) or fallback
+end
+
+local function isEnabled(t)
+  return not (t and t.enabled == false)
+end
+
+local function getEnabledMaterials()
+  local list = {}
+  for name, mat in pairs(cfg.materials or {}) do
+    if isEnabled(mat) then
+      list[#list + 1] = name
+    end
+  end
+  table.sort(list)
+  if #list == 0 then list = {"none"} end
+  return list
+end
+
+local function getEnabledGrades()
+  local list = {}
+  for key, g in pairs(cfg.grades or {}) do
+    if isEnabled(g) then
+      list[#list + 1] = key
+    end
+  end
+  table.sort(list)
+  if #list == 0 then
+    -- hard fallback if grades table was deleted
+    list = {"standard"}
+    cfg.grades = cfg.grades or {}
+    cfg.grades.standard = cfg.grades.standard or { label = "Standard", mult = 1.0, enabled = true }
+  end
+  return list
+end
+
+local function ensureGrade()
+  local grades = getEnabledGrades()
+  local def = cfg.defaultGrade
+  if def and cfg.grades and cfg.grades[def] and isEnabled(cfg.grades[def]) then
+    M.state.grade = def
+    return
+  end
+  M.state.grade = grades[1]
+end
+
+local function asSet(list)
+  local s = {}
+  for _,v in ipairs(list or {}) do s[v] = true end
+  return s
+end
+
+local function allowedMaterialsForPart(part)
+  local mats = getEnabledMaterials()
+
+  local rule = (cfg.partRules and cfg.partRules[part]) or nil
+  if not rule then return mats end
+
+  local allow = rule.allow
+  local exclude = rule.exclude
+
+  local allowSet = (type(allow) == "table") and asSet(allow) or nil
+  local excludeSet = (type(exclude) == "table") and asSet(exclude) or nil
+
+  local out = {}
+  for _,m in ipairs(mats) do
+    local ok = true
+    if allowSet and next(allowSet) ~= nil then
+      ok = allowSet[m] == true
+    end
+    if ok and excludeSet and excludeSet[m] == true then
+      ok = false
+    end
+    if ok then out[#out + 1] = m end
+  end
+
+  if #out == 0 then out = {"none"} end
+  return out
+end
+
+local function cycleValue(current, list, dir)
+  local idx = 1
+  for i,v in ipairs(list) do
+    if v == current then idx = i break end
+  end
+  idx = idx + (dir or 1)
+  if idx > #list then idx = 1 end
+  if idx < 1 then idx = #list end
+  return list[idx]
+end
+
+local function toolEnabled(name)
+  local t = cfg.tools and cfg.tools[name]
+  if not t then return false end
+  return isEnabled(t)
+end
+
+local function ensureParts(toolName)
+  M.state.parts = {}
+  local def = cfg.tools and cfg.tools[toolName]
+  if not def then return end
+  for _,p in ipairs(def.parts or {}) do
+    local mats = allowedMaterialsForPart(p)
+    M.state.parts[p] = mats[1]
+  end
+end
+
+local function gradeMult()
+  local g = cfg.grades and cfg.grades[M.state.grade or ""]
+  local mult = g and tonumber(g.mult) or 1.0
+  if mult <= 0 then mult = 1.0 end
+  return mult
+end
+
+local function calcTotal()
+  local subtotal = 0
+  for part, matName in pairs(M.state.parts or {}) do
+    local mat = cfg.materials and cfg.materials[matName]
+    subtotal = subtotal + (mat and tonumber(mat.price) or 0)
+  end
+
+  local total = subtotal * gradeMult()
+
+  if cfg.sales and cfg.sales.enabled then
+    local d = tonumber(cfg.sales.discount) or 0
+    total = total * (1 - d)
+  end
+
+  -- round to nearest int
+  return math.floor(total + 0.5)
+end
+
+-- =========================
+-- DRAW
+-- =========================
+
+local function drawHeader(m, w)
+  local headerBg = uiColor("header", colors.gray)
+  ui.panel(m, 1, 1, w, 3, headerBg)
+
+  local title = (cfg.ui and cfg.ui.title) or "ORDER"
+  ui.label(m, 3, 2, title, uiColor("text", colors.white), headerBg)
+
+  ui.rightText(m, w - 2, 2, "Config: C", colors.white, headerBg)
+end
+
+local function drawSidebar(m, x, y, w, h)
+  local bg = uiColor("sidebar", colors.lightGray)
+  local border = colors.gray
+  ui.box(m, x, y, w, h, bg, border, "TOOLS", colors.black)
+
+  local cy = y + 2
+  local cats = cfg.toolCategories or {}
+
+  local function drawGroup(key, items)
+    if cy > y + h - 2 then return end
+
+    local isOpen = M.state.groupOpen[key] and true or false
+    local mark = isOpen and "v" or ">"
+    local selected = (M.state.groupSelected == key)
+    local gBg = selected and uiColor("accent", colors.blue) or colors.gray
+    local gFg = colors.white
+
+    ui.panel(m, x + 1, cy, w - 2, 1, gBg)
+    ui.label(m, x + 2, cy, mark .. " " .. key, gFg, gBg)
+    hits[#hits + 1] = { kind = "group", key = key, x1 = x + 1, x2 = x + w - 2, y1 = cy, y2 = cy }
+    cy = cy + 1
+
+    if isOpen then
+      for _,toolName in ipairs(items or {}) do
+        if cy > y + h - 2 then return end
+        if toolEnabled(toolName) then
+          local sel = (M.state.tool == toolName)
+          local tBg = sel and colors.blue or bg
+          local tFg = sel and colors.white or colors.black
+          ui.panel(m, x + 2, cy, w - 4, 1, tBg)
+          ui.label(m, x + 3, cy, ui.truncate(toolName, w - 6), tFg, tBg)
+          hits[#hits + 1] = { kind = "tool", tool = toolName, x1 = x + 2, x2 = x + w - 3, y1 = cy, y2 = cy }
+          cy = cy + 1
+        end
+      end
+    end
+
+    cy = cy + 1
+  end
+
+  drawGroup("Armor",   cats.Armor)
+  drawGroup("Weapons", cats.Weapons)
+  drawGroup("Ranged",  cats.Ranged)
+  drawGroup("Tools",   cats.Tools)
+  drawGroup("Jewelry", cats.Jewelry)
+end
+
+local function drawGradeRow(m, x, y, w)
+  ensureGrade()
+
+  local grades = getEnabledGrades()
+  local gDef = cfg.grades and cfg.grades[M.state.grade]
+  local label = gDef and (gDef.label or M.state.grade) or (M.state.grade or "")
+  local mult = gradeMult()
+
+  ui.label(m, x, y, "Grade:", colors.white)
+
+  local btnW = 3
+  local boxX = x + 8
+  local boxW = math.max(12, w - 8 - (btnW * 2) - 10)
+  local bg = colors.lightBlue
+
+  -- <
+  ui.button(m, boxX, y, btnW, 1, "<", colors.blue, colors.white)
+  hits[#hits + 1] = { kind = "grade", dir = -1, x1 = boxX, x2 = boxX + btnW - 1, y1 = y, y2 = y }
+
+  -- label
+  ui.panel(m, boxX + btnW, y, boxW, 1, bg)
+  ui.centerText(m, boxX + btnW, boxX + btnW + boxW - 1, y, label, colors.black, bg)
+  hits[#hits + 1] = { kind = "grade", dir = 1, x1 = boxX + btnW, x2 = boxX + btnW + boxW - 1, y1 = y, y2 = y }
+
+  -- >
+  ui.button(m, boxX + btnW + boxW, y, btnW, 1, ">", colors.blue, colors.white)
+  hits[#hits + 1] = { kind = "grade", dir = 1, x1 = boxX + btnW + boxW, x2 = boxX + btnW + boxW + btnW - 1, y1 = y, y2 = y }
+
+  ui.rightText(m, x + w - 1, y, string.format("x%.2f", mult), colors.yellow)
+end
+
+local function drawParts(m, x, y, w, h)
+  local bg = uiColor("background", colors.black)
+  local surface = uiColor("surface", colors.gray)
+  ui.box(m, x, y, w, h, surface, colors.gray, "ORDER", colors.white)
+
+  if not M.state.tool then
+    ui.centerText(m, x, x + w - 1, y + 3, "Select a tool on the left", colors.white, surface)
+    return
+  end
+
+  ui.label(m, x + 2, y + 1, "Tool: " .. tostring(M.state.tool), colors.white, surface)
+  drawGradeRow(m, x + 2, y + 2, w - 4)
+
+  local def = cfg.tools and cfg.tools[M.state.tool]
+  local parts = def and def.parts or {}
+
+  local listY = y + 4
+  local listH = h - 10
+  if listH < 1 then listH = 1 end
+
+  -- One row per part.
+  local rowY = listY
+  for i = 1, math.min(#parts, listH) do
+    local part = parts[i]
+    local allowed = allowedMaterialsForPart(part)
+    local cur = M.state.parts[part] or allowed[1]
+    if cur ~= M.state.parts[part] then M.state.parts[part] = cur end
+
+    local partX = x + 2
+    local nameW = 10
+    ui.label(m, partX, rowY, ui.truncate(part, nameW), colors.white, surface)
+
+    local btnW = 3
+    local boxX = x + 2 + nameW + 2
+    local boxW = math.max(10, w - (nameW + 2) - (btnW * 2) - 12)
+
+    -- <
+    ui.button(m, boxX, rowY, btnW, 1, "<", colors.blue, colors.white)
+    hits[#hits + 1] = { kind = "mat", part = part, dir = -1, x1 = boxX, x2 = boxX + btnW - 1, y1 = rowY, y2 = rowY }
+
+    -- label (tap cycles forward)
+    ui.panel(m, boxX + btnW, rowY, boxW, 1, colors.lightBlue)
+    ui.centerText(m, boxX + btnW, boxX + btnW + boxW - 1, rowY, ui.truncate(cur, boxW), colors.black, colors.lightBlue)
+    hits[#hits + 1] = { kind = "mat", part = part, dir = 1, x1 = boxX + btnW, x2 = boxX + btnW + boxW - 1, y1 = rowY, y2 = rowY }
+
+    -- >
+    ui.button(m, boxX + btnW + boxW, rowY, btnW, 1, ">", colors.blue, colors.white)
+    hits[#hits + 1] = { kind = "mat", part = part, dir = 1, x1 = boxX + btnW + boxW, x2 = boxX + btnW + boxW + btnW - 1, y1 = rowY, y2 = rowY }
+
+    -- price
+    local base = (cfg.materials and cfg.materials[cur] and tonumber(cfg.materials[cur].price)) or 0
+    local p = math.floor(base * gradeMult() + 0.5)
+    ui.rightText(m, x + w - 2, rowY, tostring(p) .. "$", colors.yellow, surface)
+
+    rowY = rowY + 1
+  end
+
+  -- Footer: buttons + total
+  local btnY = y + h - 5
+  local btnW = math.floor((w - 6) / 2)
+  if btnW < 10 then btnW = w - 4 end
+
+  ui.button(m, x + 2, btnY, btnW, 3, "PLACE ORDER", uiColor("ok", colors.green), uiColor("textDark", colors.black))
+  hits[#hits + 1] = { kind = "place", x1 = x + 2, x2 = x + 2 + btnW - 1, y1 = btnY, y2 = btnY + 2 }
+
+  ui.button(m, x + 3 + btnW, btnY, w - (btnW + 5), 3, "RESET", colors.red, colors.white)
+  hits[#hits + 1] = { kind = "reset", x1 = x + 3 + btnW, x2 = x + w - 2, y1 = btnY, y2 = btnY + 2 }
+
+  local total = calcTotal()
+  local barY = y + h - 1
+  ui.panel(m, x + 2, barY, w - 4, 1, colors.black)
+  ui.label(m, x + 4, barY, "TOTAL: " .. tostring(total) .. "$", colors.lime, colors.black)
+
+  local g = cfg.grades and cfg.grades[M.state.grade or ""]
+  if g and g.label then
+    ui.rightText(m, x + w - 2, barY, g.label, colors.lightGray, colors.black)
+  end
+end
+
+function M.draw(m)
+  hits = {}
+  ensureGrade()
+
+  local bg = uiColor("background", colors.black)
+  m.setBackgroundColor(bg)
+  m.clear()
+
+  local w, h = m.getSize()
+  drawHeader(m, w)
+
+  local leftW = math.max(18, math.floor(w * 0.30))
+  if leftW > 28 then leftW = 28 end
+
+  drawSidebar(m, 1, 4, leftW, h - 3)
+  drawParts(m, leftW + 1, 4, w - leftW, h - 3)
+end
+
+-- =========================
+-- INPUT
+-- =========================
+
+function M.touch(x, y)
+  for _,r in ipairs(hits) do
+    if ui.hitRect(x, y, r) then
+      if r.kind == "group" then
+        M.state.groupSelected = r.key
+        M.state.groupOpen[r.key] = not M.state.groupOpen[r.key]
+        return
+      end
+
+      if r.kind == "tool" then
+        M.state.tool = r.tool
+        ensureParts(r.tool)
+        return
+      end
+
+      if r.kind == "grade" then
+        local grades = getEnabledGrades()
+        ensureGrade()
+        M.state.grade = cycleValue(M.state.grade, grades, r.dir or 1)
+        return
+      end
+
+      if r.kind == "mat" then
+        local allowed = allowedMaterialsForPart(r.part)
+        local cur = M.state.parts[r.part] or allowed[1]
+        M.state.parts[r.part] = cycleValue(cur, allowed, r.dir or 1)
+        return
+      end
+
+      if r.kind == "place" then
+        if M.state.tool then
+          M.state.submit = true
+        end
+        return
+      end
+
+      if r.kind == "reset" then
+        if M.reset then M.reset() end
+        return
+      end
+    end
+  end
+end
+
+-- =========================
+-- ORDER OUTPUT
+-- =========================
+
+function M.reset()
+  M.state.tool = nil
+  M.state.parts = {}
+  M.state.submit = false
+  ensureGrade()
+  M.state.groupSelected = "Tools"
+  M.state.groupOpen = {
+    Armor   = false,
+    Tools   = true,
+    Weapons = false,
+    Ranged  = false,
+    Jewelry = false,
+  }
+end
+
+function M.getOrder(user)
+  if not M.state.submit then return nil end
+  M.state.submit = false
+
+  local partsCopy = {}
+  for k,v in pairs(M.state.parts or {}) do partsCopy[k] = v end
+
+  local gKey = M.state.grade
+  local gDef = cfg.grades and cfg.grades[gKey or ""]
+
+  local order = {
+    id = os.epoch("utc"),
+    user = user,
+    tool = M.state.tool,
+    parts = partsCopy,
+    grade = gKey,
+    gradeLabel = gDef and gDef.label or gKey,
+    gradeMult = gradeMult(),
+    status = "pending",
+    total = calcTotal(),
+    _submit = true,
+  }
+
+  if M.reset then M.reset() end
+  return order
+end
+
+return M

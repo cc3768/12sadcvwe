@@ -1,34 +1,22 @@
--- Shared config for BOTH shop and queue computers.
---
--- This file provides:
---   cfg.ui          (colors + title)
---   cfg.materials   (base price + enabled)
---   cfg.grades      (material grade multiplier system)
---   cfg.defaultGrade
---   cfg.partRules   (exclude/allow materials per part)
---   cfg.tools       (tool -> parts)
---   cfg.toolCategories
---   cfg.sales
---   cfg.rednet      (protocol + heartbeat)
---   cfg.monitors
+-- config.lua
+-- Shared config for BOTH shop (builder) and queue computers.
+-- Saved overrides are stored in config.db (textutils.serialize).
 
 local cfg = {
+
+  -- =========================
+  -- UI THEME
+  -- =========================
   ui = {
     title      = "THE FORGE Order Screen",
     background = colors.black,
     header     = colors.gray,
     accent     = colors.cyan,
-    -- Optional extras used by the new UI (safe to delete if you want)
-    surface    = colors.gray,
-    sidebar    = colors.lightGray,
-    text       = colors.white,
-    textDark   = colors.black,
-    ok         = colors.lime,
-    warn       = colors.orange,
-    danger     = colors.red,
   },
 
-  -- Base price PER PART.
+  -- =========================
+  -- MATERIALS (base price)
+  -- =========================
   materials = {
     none        = { price = 0,   enabled = true },
     wood        = { price = 5,   enabled = true },
@@ -40,28 +28,35 @@ local cfg = {
     speed_alloy = { price = 150, enabled = true },
   },
 
-  -- Material grade system.
-  -- Total = sum(material.price for each part) * grade.mult, then optional sale discount.
+  -- =========================
+  -- GRADES (applied per-part)
+  -- price formula per part:
+  --   final = base * mult + add
+  -- =========================
+  gradeDefault = "basic",
+
   grades = {
-    standard   = { label = "Standard",   mult = 1.00, enabled = true },
-    refined    = { label = "Refined",    mult = 1.20, enabled = true },
-    pristine   = { label = "Pristine",   mult = 1.40, enabled = true },
-    masterwork = { label = "Masterwork", mult = 1.60, enabled = true },
-  },
-  defaultGrade = "standard",
-
-  -- Part material rules.
-  --
-  -- Examples:
-  --   partRules.blade  = { exclude = {"wood","stone"} }
-  --   partRules.handle = { allow   = {"wood","iron"} }
-  --
-  -- Rules are GLOBAL by part name (applies across all tools).
-  partRules = {
-    -- empty by default
+    { id = "basic",  label = "Basic",  mult = 1.00, add = 0,  enabled = true },
+    { id = "fine",   label = "Fine",   mult = 1.15, add = 5,  enabled = true },
+    { id = "master", label = "Master", mult = 1.35, add = 15, enabled = true },
   },
 
+  -- =========================
+  -- MATERIAL EXCLUSIONS
+  -- =========================
+  -- Global exclusions by part name (applies to all tools):
+  --   partMaterialExclusions = { blade = { wood=true, stone=true } }
+  partMaterialExclusions = {},
+
+  -- Per-tool exclusions by part name:
+  --   cfg.tools.sword.exclude = { blade = { wood=true } }
+  -- (kept under each tool definition)
+
+  -- =========================
+  -- TOOL / PART DEFINITIONS
+  -- =========================
   tools = {
+    -- Weapons
     sword     = { parts = {"blade","handle","binding","coating","tip","grip"}, enabled = true },
     katana    = { parts = {"blade","handle","binding","coating","tip","grip"}, enabled = true },
     machete   = { parts = {"blade","handle","binding","coating","tip","grip"}, enabled = true },
@@ -70,13 +65,15 @@ local cfg = {
     spear     = { parts = {"head","shaft"}, enabled = false },
     trident   = { parts = {"head","shaft"}, enabled = false },
     mace      = { parts = {"head","handle"}, enabled = false },
-    shield    = { parts = {"face","handle","rim"}, enabled = false },
+    shield    = { parts = {"plate","rim","boss","strap"}, enabled = false },
 
+    -- Ranged
     bow        = { parts = {"limbs","string","grip"}, enabled = false },
     crossbow   = { parts = {"frame","string","trigger"}, enabled = false },
     slingshot  = { parts = {"frame","bands"}, enabled = false },
     arrow      = { parts = {"shaft","tip","fletching"}, enabled = false },
 
+    -- Tools
     pick       = { parts = {"blade","handle","binding","coating","tip","grip"}, enabled = true },
     shovel     = { parts = {"blade","handle","binding","coating","tip","grip"}, enabled = true },
     axe        = { parts = {"blade","handle","binding","coating","tip","grip"}, enabled = true },
@@ -84,19 +81,20 @@ local cfg = {
     hammer     = { parts = {"blade","handle","binding","coating","tip","grip"}, enabled = true },
     excavator  = { parts = {"head","handle"}, enabled = false },
     saw        = { parts = {"blade","handle"}, enabled = false },
-    prospector_hammer = { parts = {"head","handle"}, enabled = false },
-    hoe        = { parts = {"head","handle"}, enabled = false },
-    mattock    = { parts = {"head","handle"}, enabled = false },
+    hoe        = { parts = {"blade","handle"}, enabled = false },
+    mattock    = { parts = {"blade","handle"}, enabled = false },
     sickle     = { parts = {"blade","handle"}, enabled = false },
-    shears     = { parts = {"blade","handle"}, enabled = false },
-    fishing_pole = { parts = {"rod","reel","line"}, enabled = false },
+    shears     = { parts = {"blades","hinge","grip"}, enabled = false },
+    fishing_pole = { parts = {"rod","reel","line","hook"}, enabled = false },
 
-    helmet     = { parts = {"main","tip","binding","coating","lining"}, enabled = true },
-    chestplate = { parts = {"main","tip","binding","coating","lining"}, enabled = true },
-    leggings   = { parts = {"main","tip","binding","coating","lining"}, enabled = true },
+    -- Armor
+    helmet     = { parts = {"main","lining","strap"}, enabled = true },
+    chestplate = { parts = {"front","back","straps","lining"}, enabled = true },
+    leggings   = { parts = {"waist","legs","lining"}, enabled = true },
     boots      = { parts = {"main","tip","binding","coating","lining"}, enabled = true },
     elytra     = { parts = {"wings","frame"}, enabled = false },
 
+    -- Jewelry
     ring       = { parts = {"band","setting"}, enabled = true },
     bracelet   = { parts = {"links","clasp"}, enabled = true },
     necklace   = { parts = {"chain","pendant"}, enabled = true },
@@ -106,20 +104,26 @@ local cfg = {
     Armor   = {"helmet","chestplate","leggings","boots","elytra"},
     Weapons = {"sword","katana","machete","knife","dagger","spear","trident","mace","shield"},
     Ranged  = {"bow","crossbow","slingshot","arrow"},
-    Tools   = {"pick","shovel","axe","paxel","hammer","excavator","saw","prospector_hammer","hoe","mattock","sickle","shears","fishing_pole"},
+    Tools   = {"pick","shovel","axe","paxel","hammer","excavator","saw","hoe","mattock","sickle","shears","fishing_pole"},
     Jewelry = {"ring","bracelet","necklace"},
   },
 
+  -- =========================
+  -- SALES (optional)
+  -- =========================
   sales = { enabled = false, discount = 0.20 },
 
+  -- =========================
+  -- NETWORK / DEVICES
+  -- =========================
   rednet = { protocol = "shop_queue_v1", heartbeat_interval = 3 },
-
-  monitors = {
-    builder = nil, -- optional preferred monitor side/name
-    queue   = nil,
-  },
+  monitors = { builder = nil, queue = nil },
+  peripherals = { playerDetectorSide = nil },
 }
 
+-- ============================================================
+-- Persisted overrides
+-- ============================================================
 local PATH = "config.db"
 
 local function merge(dst, src)
@@ -134,16 +138,17 @@ end
 
 local function snapshot()
   return {
-    ui           = cfg.ui,
-    materials    = cfg.materials,
-    grades       = cfg.grades,
-    defaultGrade = cfg.defaultGrade,
-    partRules    = cfg.partRules,
-    tools        = cfg.tools,
+    ui = cfg.ui,
+    materials = cfg.materials,
+    grades = cfg.grades,
+    gradeDefault = cfg.gradeDefault,
+    partMaterialExclusions = cfg.partMaterialExclusions,
+    tools = cfg.tools,
     toolCategories = cfg.toolCategories,
-    sales        = cfg.sales,
-    rednet       = cfg.rednet,
-    monitors     = cfg.monitors,
+    sales = cfg.sales,
+    rednet = cfg.rednet,
+    monitors = cfg.monitors,
+    peripherals = cfg.peripherals,
   }
 end
 

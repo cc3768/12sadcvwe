@@ -16,7 +16,17 @@ local mon = helper.getMonitor(cfg.monitors.builder) or error("No builder monitor
 mon.setTextScale(0.5)
 
 -- Advanced Peripherals: Player Detector
-local playerDetector = peripheral.wrap("right")
+local function getPlayerDetector()
+  if cfg.peripherals and cfg.peripherals.playerDetectorSide then
+    local side = cfg.peripherals.playerDetectorSide
+    if peripheral.getType(side) == "playerDetector" then
+      return peripheral.wrap(side)
+    end
+  end
+  return peripheral.find("playerDetector")
+end
+
+local playerDetector = getPlayerDetector()
 local detectorName = playerDetector and peripheral.getName(playerDetector) or nil
 local lastTouchUser = nil
 
@@ -40,7 +50,7 @@ local function getClosestOrAnyPlayer()
   if playerDetector.getPlayersInRange then
     local near = asArray(playerDetector.getPlayersInRange(3) or {})
     if #near > 0 then
-      return near[1] -- usually only 1 person ordering; simplest + reliable
+      return near[1]
     end
   end
 
@@ -57,9 +67,12 @@ local queueOnline = false
 local lastPing = 0
 local dirty = true
 
-local function deepCopyParts(parts)
+local function deepCopyAny(v)
+  if type(v) ~= "table" then return v end
   local out = {}
-  for k,v in pairs(parts or {}) do out[k]=v end
+  for k,val in pairs(v) do
+    out[k] = deepCopyAny(val)
+  end
   return out
 end
 
@@ -116,9 +129,7 @@ while true do
     builder.touch(p2, p3)
     dirty = true
 
-    -- IMPORTANT: do not inject a name; use UI name if it provides one
     local raw = builder.getOrder(nil)
-
     if raw and raw._submit and raw.tool then
       -- Try again right at submit moment (more accurate)
       if not lastTouchUser then
@@ -135,10 +146,9 @@ while true do
         id = raw.id or os.epoch("utc"),
         user = user,
         tool = raw.tool,
-        parts = deepCopyParts(raw.parts),
-        grade = raw.grade,
-        gradeLabel = raw.gradeLabel,
-        gradeMult = raw.gradeMult,
+        parts = deepCopyAny(raw.parts), -- materials only (compat)
+        grades = deepCopyAny(raw.grades), -- per-part grade id
+        parts_detail = deepCopyAny(raw.parts_detail), -- { material, grade } per part
         status = "pending",
         total = raw.total,
         time = os.time(),
